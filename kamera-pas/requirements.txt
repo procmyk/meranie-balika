@@ -1,5 +1,0 @@
-numpy>=1.24
-opencv-python>=4.8
-# podľa kamery nainštaluj JEDEN z týchto balíkov:
-# pyrealsense2      # Intel RealSense D4xx
-# pyorbbecsdk       # Orbbec Femto / Gemini
