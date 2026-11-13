@@ -218,7 +218,7 @@
     const longAng = rect.lenU >= rect.lenV ? rect.angle : rect.angle + Math.PI / 2;
     const R = height / 2;
     const sel = comp.filter(i => pts[i*3+1] - floorY > 0.15 * height);
-    const stepS = Math.max(1, Math.floor(sel.length / 1500));
+    const stepS = Math.max(1, Math.floor(sel.length / 400));   // ~400 bodov stačí, výpočet je rýchly
     const sub = [];
     for (let k = 0; k < sel.length; k += stepS) sub.push(sel[k]);
     const circleFit = ang => {
@@ -228,11 +228,11 @@
       const sl = ls.slice().sort((a, b) => a - b);
       const l0 = percentile(sl, 0.02), l1 = percentile(sl, 0.98);
       const rb = median(ls.map((l, k) => Math.min(Math.abs(hs2[k] - height), Math.abs(l - l0), Math.abs(l - l1))));
+      // poloha osi: najprv hrubo (2 cm), potom jemne (5 mm) okolo najlepšej
+      const resid = c => median(ls.map((l, k) => Math.abs(Math.hypot(l - c, hs2[k] - R) - R)));
       let rc = Infinity, c0 = 0;
-      for (let c = l0 - R; c <= l1 + R; c += 0.005) {
-        const r = median(ls.map((l, k) => Math.abs(Math.hypot(l - c, hs2[k] - R) - R)));
-        if (r < rc) { rc = r; c0 = c; }
-      }
+      for (let c = l0 - R; c <= l1 + R; c += 0.02) { const r = resid(c); if (r < rc) { rc = r; c0 = c; } }
+      for (let c = c0 - 0.02, cEnd = c0 + 0.02; c <= cEnd; c += 0.005) { const r = resid(c); if (r < rc) { rc = r; c0 = c; } }
       return { round: rc < 0.7 * rb, c: c0, ax, az };
     };
     if (height > 0.06 && sub.length >= 40) {

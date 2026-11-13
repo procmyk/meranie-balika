@@ -149,6 +149,8 @@ let frozen = null;          // finálny výsledok
 let manual = false;         // ručný režim
 let stable = false;         // rozmery sú ustálené (indikácia na tlačidle)
 let rejects = 0, lastSeen = -999, boxDist = null;
+let procMs = 0, procEvery = 1;   // priemerný čas výpočtu (ms), spracúva sa každá N-tá snímka
+let disp = null;                 // vyhladená poloha rámika na kreslenie {x, z, a}
 let floorCand = [];         // kandidáti výšky podlahy (auto-nastavenie)
 let floorSrc = '';          // odkiaľ je podlaha: rovina / hĺbka
 let depthFrames = 0, depthValid = 0;
@@ -252,7 +254,7 @@ function resize() {
 
 function resetAll() { floorY = null; floorCand = []; floorSrc = ''; resetMeasure(); }
 function resetMeasure() {
-  history = []; latest = null; collecting = null; frozen = null; manualPts = []; rejects = 0; boxDist = null; stable = false;
+  history = []; latest = null; collecting = null; frozen = null; manualPts = []; rejects = 0; boxDist = null; stable = false; disp = null;
   $('act').classList.remove('ok');
   $('result').style.display = 'none';
   $('note').value = ''; $('code').value = ''; showDup(null);
@@ -609,7 +611,9 @@ function frameBody(frame) {
     depthFrames++; if (d0) depthValid++;
     if (floorY === null) depthFloor = flatPatch(depth, invProj, viewMat);
 
-    if (!manual && floorY !== null && !frozen) {
+    // Náročný výpočet len tak často, ako ho telefón stíha; kreslenie beží v každej snímke.
+    if (!manual && floorY !== null && !frozen && frameNo % procEvery === 0) {
+      const t0 = performance.now();
       for (let r = 0; r < GRID_ROWS; r++) for (let c = 0; c < GRID_COLS; c++) {
         const u = (c + 0.5) / GRID_COLS, v = (r + 0.5) / GRID_ROWS;
         const d = safeDepth(depth, u, v);
@@ -619,6 +623,10 @@ function frameBody(frame) {
       }
       refineFloor();
       const det = M.detectBox(grid, floorY);
+      const dt = performance.now() - t0;
+      procMs = procMs ? 0.8 * procMs + 0.2 * dt : dt;
+      // > ~20 ms na výpočet -> spracúvaj len každú 2. alebo 3. snímku, aby obraz nesekal
+      procEvery = procMs > 40 ? 3 : procMs > 20 ? 2 : 1;
       const had = !!latest, prevHint = hintKey();
       let acc = null;
       if (det) {
@@ -688,7 +696,8 @@ function diag(nHits) {
   const ok = v => v ? '✓' : '✗';
   $('diag').textContent = `hĺbka ${depthOK ? (depthFrames ? Math.round(100 * depthValid / depthFrames) + '%' : '…') : 'nepodporovaná'}` +
     ` · rovina ${ok(nHits)}${nHits && !lastHit ? ' (nie vodorovná)' : ''}` +
-    ` · podlaha ${floorY === null ? '✗' : '✓ ' + floorSrc}`;
+    ` · podlaha ${floorY === null ? '✗' : '✓ ' + floorSrc}` +
+    (procMs ? ` · výpočet ${Math.round(procMs)} ms${procEvery > 1 ? ' (každá ' + procEvery + '.)' : ''}` : '');
   depthFrames = depthValid = 0;
 }
 
@@ -770,17 +779,50 @@ function draw() {
   const box = latest;
   if (!box || floorY === null) return;
   const agg = M.aggregate(history) || box;
-  const color = collecting ? '#ffcc00' : '#3ddc84';
-  const b = box.corners.map(([x, z]) => [x, floorY, z]);
-  const t = box.corners.map(([x, z]) => [x, floorY + agg.height, z]);
+  const ok = stable && !box.cut;
+  const color = collecting ? '#ffcc00' : ok ? '#3ddc84' : '#ffffff';
+  const pose = smoothPose(box);
+  const ca = Math.cos(pose.a), sa = Math.sin(pose.a);
+  const hl = agg.length / 2, hw = agg.width / 2;
+  const cor = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) =>
+    [pose.x + ca * i * hl - sa * j * hw, pose.z + sa * i * hl + ca * j * hw]);
+  const b = cor.map(([x, z]) => [x, floorY, z]);
+  const t = cor.map(([x, z]) => [x, floorY + agg.height, z]);
+  // polopriehľadný vrch a bočné steny -> ľahšie porovnanie so skutočným balíkom
+  fillPoly(t, ok ? 'rgba(61,220,132,.28)' : 'rgba(255,255,255,.18)');
+  for (let i = 0; i < 4; i++) fillPoly([b[i], b[(i + 1) % 4], t[(i + 1) % 4], t[i]], ok ? 'rgba(61,220,132,.10)' : 'rgba(255,255,255,.07)');
   for (let i = 0; i < 4; i++) {
-    line(b[i], b[(i + 1) % 4], color, 3);
-    line(t[i], t[(i + 1) % 4], color, 3);
+    line(b[i], b[(i + 1) % 4], color, 2);
+    line(t[i], t[(i + 1) % 4], color, 4);
     line(b[i], t[i], color, 3);
   }
   const cm = v => Math.round(v * 100);
   $('live').textContent = `${({ valec: '⬭ ', koleso: '◯ ', pneumatika: '🛞 ' })[agg.shape] || ''}${cm(agg.length)} × ${cm(agg.width)} × ${cm(agg.height)} cm`;
   $('live').style.display = frozen ? 'none' : 'block';
+}
+
+// Vyhladená poloha/natočenie rámika (rozmery sú z mediánu histórie) – rámik neposkakuje.
+function smoothPose(box) {
+  const c = box.corners;
+  const x = (c[0][0] + c[2][0]) / 2, z = (c[0][1] + c[2][1]) / 2;
+  const e1 = Math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1]), e2 = Math.hypot(c[2][0] - c[1][0], c[2][1] - c[1][1]);
+  const a = e1 >= e2 ? Math.atan2(c[1][1] - c[0][1], c[1][0] - c[0][0]) : Math.atan2(c[2][1] - c[1][1], c[2][0] - c[1][0]);
+  if (!disp || Math.hypot(x - disp.x, z - disp.z) > 0.25) { disp = { x, z, a }; return disp; }   // iný balík -> skoč
+  let da = a - disp.a;
+  while (da > Math.PI / 2) da -= Math.PI;       // obdĺžnik je súmerný: uhol berieme modulo 180°
+  while (da < -Math.PI / 2) da += Math.PI;
+  const k = 0.25;
+  disp = { x: disp.x + k * (x - disp.x), z: disp.z + k * (z - disp.z), a: disp.a + k * da };
+  return disp;
+}
+
+function fillPoly(ptsW, color) {
+  const sp = ptsW.map(toScreen);
+  if (sp.some(p => !p)) return;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.moveTo(sp[0][0], sp[0][1]);
+  for (let i = 1; i < sp.length; i++) ctx.lineTo(sp[i][0], sp[i][1]);
+  ctx.closePath(); ctx.fill();
 }
 
 function drawManual() {
