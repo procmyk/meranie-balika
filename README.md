@@ -13,9 +13,10 @@ Telefón potrebuje aplikáciu *Google Play Services for AR*.
 
 ## Číslo balíka zo štítka
 
-Po zmeraní ťukni na **📷** vedľa poľa *Číslo balíka* a namier telefón na kód na štítku (10–30 cm). Prečíta čiarové kódy (Code 128, EAN, ITF…) aj 2D kódy (QR, DataMatrix, PDF417). Číslo sa vyplní samo a telefón zavibruje.
+Po zmeraní ťukni na **📷** vedľa poľa *Číslo balíka*. AR meranie sa na chvíľu vypne a zapne sa bežný fotoaparát s automatickým zaostrovaním (počas AR má kamera pevné zaostrenie na diaľku). K dispozícii je **🔦 blesk** a **2× priblíženie**.
+Prečíta čiarové kódy (Code 128, EAN, ITF…) aj 2D kódy (QR, DataMatrix, PDF417). Číslo sa vyplní samo a telefón zavibruje.
+Po **Uložiť a merať ďalší** sa meranie spustí znova a podlaha sa nastaví sama.
 Ak je balík s rovnakým číslom už uložený, aplikácia upozorní a uloží ho až po druhom stlačení.
-Funguje to na telefónoch s Chrome, ktoré počas AR sprístupnia obraz kamery. Inak sa číslo dá napísať ručne.
 
 ## Export meraní
 
