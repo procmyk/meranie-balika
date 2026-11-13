@@ -25,6 +25,7 @@
   #result .sub { color: #bbb; font-size: 14px; }
   #result .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
   #mode { position: absolute; top: 70px; right: 12px; font-size: 13px; padding: 8px 12px; }
+  #auto { position: absolute; top: 116px; right: 12px; font-size: 13px; padding: 8px 12px; }
   #count { position: absolute; top: 70px; left: 12px; font-size: 13px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.6); }
   #result input { width: 100%; margin-top: 12px; padding: 12px; border-radius: 10px; border: 1px solid #555; background: #222; color: #fff; font: inherit; }
   #log { width: 100%; max-width: 520px; display: none; flex-direction: column; gap: 10px; }
@@ -59,6 +60,7 @@
   <div id="hint">Inicializujem…</div>
   <button id="mode" class="sec">Ručný režim</button>
   <div id="count"></div>
+  <button id="auto" class="sec">Auto: zap</button>
   <div id="live"></div>
   <div id="bar">
     <button id="act">Nastaviť podlahu</button>
@@ -86,7 +88,10 @@ const M = window.Measure;
 // ---------- nastavenia ----------
 const GRID_COLS = 64, GRID_ROWS = 112;   // vzorkovanie hĺbkovej mapy
 const HISTORY = 25;                        // počet snímok pre medián
-const FINAL_SAMPLES = 20;                  // snímky zbierané po stlačení "Zmerať"
+const FINAL_SAMPLES = 8;                   // snímky zbierané po stlačení "Zmerať" (ak ešte nie je dosť histórie)
+const STABLE_N = 8;                        // auto-meranie: počet po sebe idúcich zhodných snímok
+const STABLE_TOL = 0.015;                  // auto-meranie: max. rozptyl rozmeru (m)
+const DIST_MIN = 0.45, DIST_MAX = 1.3;     // odporúčaná vzdialenosť od balíka (m)
 
 // ---------- stav ----------
 let session, refSpace, viewerSpace, hitSource, gl;
@@ -98,6 +103,8 @@ let latest = null;          // posledná detekcia (na kreslenie)
 let collecting = null;      // pole meraní počas finálneho zberu
 let frozen = null;          // finálny výsledok
 let manual = false;         // ručný režim
+let autoMode = true;        // automaticky zmerať po ustálení
+let rejects = 0, lastSeen = -999, boxDist = null;
 let manualPts = [];         // ručné body [x,y,z]
 let frameNo = 0;
 let lastView = null;        // {proj, viewInv}
@@ -121,6 +128,7 @@ $('exit').onclick = () => session && session.end();
 $('reset').onclick = resetAll;
 $('save').onclick = () => { saveRecord(); resetMeasure(); };
 $('discard').onclick = resetMeasure;
+$('auto').onclick = () => { autoMode = !autoMode; updateUI(); };
 $('exp').onclick = exportCSV;
 $('share').onclick = shareCSV;
 $('clear').onclick = () => {
@@ -183,7 +191,7 @@ function resize() {
 
 function resetAll() { floorY = null; resetMeasure(); }
 function resetMeasure() {
-  history = []; latest = null; collecting = null; frozen = null; manualPts = [];
+  history = []; latest = null; collecting = null; frozen = null; manualPts = []; rejects = 0; boxDist = null;
   $('result').style.display = 'none';
   $('note').value = '';
   updateUI();
@@ -205,7 +213,10 @@ function onAction() {
     }
     updateUI(); return;
   }
-  if (!collecting && latest) { collecting = []; updateUI(); }
+  if (!collecting && latest) {
+    if (history.length >= 5) showResult(M.aggregate(history.slice(-10)));
+    else { collecting = []; updateUI(); }
+  }
 }
 
 function finishManual() {
@@ -235,6 +246,8 @@ function updateUI() {
   $('mode').style.display = depthOK ? '' : 'none';
   $('live').style.display = 'none';
   $('count').textContent = `Uložené: ${records.length}`;
+  $('auto').textContent = autoMode ? 'Auto: zap' : 'Auto: vyp';
+  $('auto').style.display = manual ? 'none' : '';
   if (frozen) { hint.textContent = 'Hotovo. Ulož meranie alebo ho zahoď.'; act.style.display = 'none'; return; }
   act.style.display = '';
   if (floorY === null) {
@@ -248,9 +261,12 @@ function updateUI() {
     act.textContent = 'Bod'; act.disabled = false; return;
   }
   if (collecting) { hint.textContent = 'Meriam… drž telefón v kľude.'; act.disabled = true; act.textContent = 'Meriam…'; return; }
-  hint.textContent = latest
-    ? 'Balík nájdený. Pre presnosť ho maj celý v zábere, ideálne zhora šikmo. Potom stlač Zmerať.'
-    : 'Namier stred obrazovky na balík zo vzdialenosti ~0,5–1,5 m, mierne zhora.';
+  let h;
+  if (!latest) h = 'Namier krížik na balík zo vzdialenosti ~0,5–1 m, šikmo zhora (cca 45°). Celý balík a kúsok podlahy okolo musia byť v zábere.';
+  else if (boxDist !== null && boxDist < DIST_MIN) h = '⬆ Si príliš blízko – odstúp, celý balík musí byť v zábere.';
+  else if (boxDist !== null && boxDist > DIST_MAX) h = '⬇ Si príliš ďaleko – podíď bližšie (0,5–1 m).';
+  else h = autoMode ? 'Balík nájdený – drž telefón chvíľu v kľude, zmeria sa sám.' : 'Balík nájdený – stlač Zmerať.';
+  hint.textContent = h;
   act.textContent = 'Zmerať'; act.disabled = !latest;
 }
 
@@ -361,7 +377,7 @@ function onFrame(t, frame) {
     const d0 = safeDepth(depth, 0.5, 0.5);
     if (d0) centerPoint = M.unproject(invProj, viewMat, 0.5, 0.5, d0);
 
-    if (!manual && floorY !== null && !frozen && frameNo % 2 === 0) {
+    if (!manual && floorY !== null && !frozen) {
       for (let r = 0; r < GRID_ROWS; r++) for (let c = 0; c < GRID_COLS; c++) {
         const u = (c + 0.5) / GRID_COLS, v = (r + 0.5) / GRID_ROWS;
         const d = safeDepth(depth, u, v);
@@ -369,20 +385,57 @@ function onFrame(t, frame) {
         if (d) { const p = M.unproject(invProj, viewMat, u, v, d); grid.pts[k] = p[0]; grid.pts[k+1] = p[1]; grid.pts[k+2] = p[2]; }
         else grid.pts[k] = grid.pts[k+1] = grid.pts[k+2] = NaN;
       }
+      refineFloor();
       const det = M.detectBox(grid, floorY);
-      const had = !!latest;
-      latest = det;
+      const had = !!latest, prevHint = hintKey();
+      let acc = null;
       if (det) {
-        history.push(det); if (history.length > HISTORY) history.shift();
-        if (collecting) {
-          collecting.push(det);
-          if (collecting.length >= FINAL_SAMPLES) { const r = M.aggregate(collecting); collecting = null; showResult(r); }
-        }
+        // odmietni snímky, ktoré sa výrazne líšia od doterajšieho mediánu (skoky)
+        const ref = history.length >= 5 ? M.aggregate(history) : null;
+        const near = (a, b) => Math.abs(a - b) < Math.max(0.03, 0.15 * b);
+        if (!ref || (near(det.length, ref.length) && near(det.width, ref.width) && near(det.height, ref.height))) { acc = det; rejects = 0; }
+        else if (++rejects > 15) { history = []; acc = det; rejects = 0; }   // asi iný balík
       }
-      if (had !== !!det) updateUI();
+      if (acc) {
+        latest = acc; lastSeen = frameNo;
+        history.push(acc); if (history.length > HISTORY) history.shift();
+        const cx = (acc.corners[0][0] + acc.corners[2][0]) / 2, cz = (acc.corners[0][1] + acc.corners[2][1]) / 2;
+        boxDist = Math.hypot(viewMat[12] - cx, viewMat[13] - (floorY + acc.height / 2), viewMat[14] - cz);
+        if (collecting) {
+          collecting.push(acc);
+          if (collecting.length >= FINAL_SAMPLES) { const r = M.aggregate(collecting); collecting = null; showResult(r); }
+        } else if (autoMode && isStable() && boxDist >= DIST_MIN && boxDist <= DIST_MAX) {
+          showResult(M.aggregate(history.slice(-STABLE_N)));
+        }
+      } else if (frameNo - lastSeen > 15) { latest = null; boxDist = null; }
+      if (had !== !!latest || prevHint !== hintKey()) updateUI();
     }
   }
   draw();
+}
+
+function hintKey() {
+  return !latest ? 0 : boxDist === null ? 1 : boxDist < DIST_MIN ? 2 : boxDist > DIST_MAX ? 3 : 1;
+}
+
+function isStable() {
+  if (history.length < STABLE_N) return false;
+  const last = history.slice(-STABLE_N);
+  return ['length', 'width', 'height'].every(k => {
+    const v = last.map(m => m[k]);
+    return Math.max(...v) - Math.min(...v) <= STABLE_TOL;
+  });
+}
+
+// Podlaha sa priebežne spresňuje z hĺbkovej mapy (ARCore ju časom mierne posúva).
+function refineFloor() {
+  const ys = [];
+  const pts = grid.pts;
+  for (let i = 1; i < pts.length; i += 3 * 3) {   // každý 3. bod
+    const y = pts[i];
+    if (y === y && Math.abs(y - floorY) < 0.03) ys.push(y);
+  }
+  if (ys.length > 150) floorY += (M.median(ys) - floorY) * 0.1;
 }
 
 function safeDepth(depth, u, v) {
@@ -438,7 +491,7 @@ function draw() {
   const agg = M.aggregate(history) || box;
   const color = collecting ? '#ffcc00' : '#3ddc84';
   const b = box.corners.map(([x, z]) => [x, floorY, z]);
-  const t = box.corners.map(([x, z]) => [x, box.topY, z]);
+  const t = box.corners.map(([x, z]) => [x, floorY + agg.height, z]);
   for (let i = 0; i < 4; i++) {
     line(b[i], b[(i + 1) % 4], color, 3);
     line(t[i], t[(i + 1) % 4], color, 3);
