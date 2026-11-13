@@ -294,7 +294,8 @@ function showResult(r) {
   $('rdims').textContent = `${L} × ${W} × ${H} cm`;
   const cat = M.categorize(L, W, H);
   $('rcat').textContent = cat.id; $('rcat').style.background = cat.color;
-  $('rshape').style.display = r.shape === 'valec' ? 'inline-block' : 'none';
+  $('rshape').style.display = r.shape === 'valec' || r.shape === 'koleso' ? 'inline-block' : 'none';
+  $('rshape').textContent = r.shape === 'koleso' ? '◯ koleso' : '⬭ valec';
   const vol = (L * W * H) / 1000;
   const cyl = r.shape === 'valec' ? ` (valec ≈ ${(Math.PI / 4 * vol).toFixed(1).replace('.', ',')} l)` : '';
   $('rsub').textContent = `Objem ${vol.toFixed(1).replace('.', ',')} l${cyl} · objemová hmotnosť ${(L * W * H / 5000).toFixed(1).replace('.', ',')} kg (÷5000)` +
@@ -491,7 +492,7 @@ function renderLog() {
   $('catsum').innerHTML = catStats().filter(c => c.count).map(c =>
     `<span><span class="cat small" style="background:${c.color}">${c.id}</span> ${c.count} ks · ${c.liters.toFixed(1).replace('.', ',')} l</span>`).join('');
   $('logtable').innerHTML = '<table><tr><th>#</th><th>Kat.</th><th>Čas</th><th>D×Š×V cm</th><th>l</th><th>Číslo balíka</th></tr>' +
-    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td><span class="cat small" style="background:${catOf(r).color}">${catOf(r).id}</span></td><td>${shortTime(r.time)}</td><td>${r.shape === 'valec' ? '⬭ ' : ''}${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.code || '')}${r.note ? ` <span style="color:#999">${esc(r.note)}</span>` : ''}</td></tr>`).join('') +
+    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td><span class="cat small" style="background:${catOf(r).color}">${catOf(r).id}</span></td><td>${shortTime(r.time)}</td><td>${r.shape === 'valec' ? '⬭ ' : r.shape === 'koleso' ? '◯ ' : ''}${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.code || '')}${r.note ? ` <span style="color:#999">${esc(r.note)}</span>` : ''}</td></tr>`).join('') +
     '</table>';
 }
 
@@ -753,7 +754,7 @@ function draw() {
     line(b[i], t[i], color, 3);
   }
   const cm = v => Math.round(v * 100);
-  $('live').textContent = `${agg.shape === 'valec' ? '⬭ ' : ''}${cm(agg.length)} × ${cm(agg.width)} × ${cm(agg.height)} cm`;
+  $('live').textContent = `${agg.shape === 'valec' ? '⬭ ' : agg.shape === 'koleso' ? '◯ ' : ''}${cm(agg.length)} × ${cm(agg.width)} × ${cm(agg.height)} cm`;
   $('live').style.display = frozen ? 'none' : 'block';
 }
 

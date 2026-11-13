@@ -141,38 +141,51 @@
         if (h > opts.minH && h < opts.maxH) elevated[i] = 1;
       }
     }
-    // seed = vyvyseny bod najblizsie stredu obrazu
+    // Začiatok (seed): vyvýšené body podľa vzdialenosti od stredu obrazu. Skúšame postupne,
+    // kým z niektorého nevyrastie dosť veľký objekt (osamelý šumový bod alebo podlaha v otvore
+    // pneumatiky by inak meranie zablokovali).
     const cc = (cols - 1) / 2, cr = (rows - 1) / 2;
-    let seed = -1, bestD = Infinity;
     const maxR = Math.min(cols, rows) * 0.35;
+    const cand = [];
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
       const i = r * cols + c;
       if (!elevated[i]) continue;
       const d = (c - cc) * (c - cc) + (r - cr) * (r - cr);
-      if (d < bestD && d < maxR * maxR) { bestD = d; seed = i; }
+      if (d < maxR * maxR) cand.push([d, i]);
     }
-    if (seed < 0) return null;
+    if (!cand.length) return null;
+    cand.sort((a, b) => a[0] - b[0]);
 
-    // rast oblasti po mriezke
+    // rast oblasti po mriežke
     const inComp = new Uint8Array(n);
-    const queue = [seed];
-    inComp[seed] = 1;
-    const comp = [];
     const link2 = opts.link * opts.link;
-    while (queue.length) {
-      const i = queue.pop();
-      comp.push(i);
-      const r = (i / cols) | 0, c = i - r * cols;
-      const nb = [];
-      if (c > 0) nb.push(i - 1);
-      if (c < cols - 1) nb.push(i + 1);
-      if (r > 0) nb.push(i - cols);
-      if (r < rows - 1) nb.push(i + cols);
-      for (const j of nb) {
-        if (inComp[j] || !elevated[j]) continue;
-        const dx = pts[i*3] - pts[j*3], dy = pts[i*3+1] - pts[j*3+1], dz = pts[i*3+2] - pts[j*3+2];
-        if (dx*dx + dy*dy + dz*dz < link2) { inComp[j] = 1; queue.push(j); }
+    const grow = seed => {
+      const queue = [seed], out = [];
+      inComp[seed] = 1;
+      while (queue.length) {
+        const i = queue.pop();
+        out.push(i);
+        const r = (i / cols) | 0, c = i - r * cols;
+        const nb = [];
+        if (c > 0) nb.push(i - 1);
+        if (c < cols - 1) nb.push(i + 1);
+        if (r > 0) nb.push(i - cols);
+        if (r < rows - 1) nb.push(i + cols);
+        for (const j of nb) {
+          if (inComp[j] || !elevated[j]) continue;
+          const dx = pts[i*3] - pts[j*3], dy = pts[i*3+1] - pts[j*3+1], dz = pts[i*3+2] - pts[j*3+2];
+          if (dx*dx + dy*dy + dz*dz < link2) { inComp[j] = 1; queue.push(j); }
+        }
       }
+      return out;
+    };
+    let comp = [];
+    for (let k = 0, tries = 0; k < cand.length && tries < 40; k++) {
+      const i = cand[k][1];
+      if (inComp[i]) continue;
+      tries++;
+      comp = grow(i);
+      if (comp.length >= opts.minPts) break;
     }
     if (comp.length < opts.minPts) return null;
     // dotýka sa balík okraja obrazu? -> nie je celý v zábere, rozmery by boli skreslené
@@ -196,39 +209,52 @@
     let L = Math.max(rect.lenU, rect.lenV), W = Math.min(rect.lenU, rect.lenV);
     let corners = rect.corners, shape = 'krabica';
 
-    // Ležiaci valec (napr. stočený matrac)? Priečny rez (priečna poloha × výška) porovnáme
-    // s kružnicou (polomer = výška/2, leží na podlahe) a s obdĺžnikom (vrch + zvislé steny).
+    // Zaoblené tvary: rez balíkom (vodorovná poloha × výška) porovnáme s kružnicou
+    // (polomer = výška/2, leží na podlahe) a s obdĺžnikom (vrch + zvislé steny).
+    //  - priečny rez kruhový  -> ležiaci valec (stočený matrac): šírka = priemer = výška
+    //  - pozdĺžny rez kruhový -> stojace koleso / pneumatika: dĺžka = priemer = výška
+    // Zo šikmého pohľadu kamera nevidí zadnú polovicu oblúka, preto rozmer dopočítame.
     const cx = (corners[0][0] + corners[2][0]) / 2, cz = (corners[0][1] + corners[2][1]) / 2;
-    const ang = rect.lenU >= rect.lenV ? rect.angle + Math.PI / 2 : rect.angle;   // priečny smer
-    const lx = Math.cos(ang), lz = Math.sin(ang);
+    const longAng = rect.lenU >= rect.lenV ? rect.angle : rect.angle + Math.PI / 2;
     const R = height / 2;
-    if (height > 0.06 && L > 1.1 * height && W < 1.2 * height) {
-      const sel = comp.filter(i => pts[i*3+1] - floorY > 0.15 * height);
-      const step = Math.max(1, Math.floor(sel.length / 1500));
-      const ls = [], hs2 = [];
-      for (let k = 0; k < sel.length; k += step) {
-        const i = sel[k];
-        ls.push((pts[i*3] - cx) * lx + (pts[i*3+2] - cz) * lz);
-        hs2.push(pts[i*3+1] - floorY);
+    const sel = comp.filter(i => pts[i*3+1] - floorY > 0.15 * height);
+    const stepS = Math.max(1, Math.floor(sel.length / 1500));
+    const sub = [];
+    for (let k = 0; k < sel.length; k += stepS) sub.push(sel[k]);
+    const circleFit = ang => {
+      const ax = Math.cos(ang), az = Math.sin(ang);
+      const ls = sub.map(i => (pts[i*3] - cx) * ax + (pts[i*3+2] - cz) * az);
+      const hs2 = sub.map(i => pts[i*3+1] - floorY);
+      const sl = ls.slice().sort((a, b) => a - b);
+      const l0 = percentile(sl, 0.02), l1 = percentile(sl, 0.98);
+      const rb = median(ls.map((l, k) => Math.min(Math.abs(hs2[k] - height), Math.abs(l - l0), Math.abs(l - l1))));
+      let rc = Infinity, c0 = 0;
+      for (let c = l0 - R; c <= l1 + R; c += 0.005) {
+        const r = median(ls.map((l, k) => Math.abs(Math.hypot(l - c, hs2[k] - R) - R)));
+        if (r < rc) { rc = r; c0 = c; }
       }
-      if (ls.length >= 40) {
-        const sl = ls.slice().sort((a, b) => a - b);
-        const l0 = percentile(sl, 0.02), l1 = percentile(sl, 0.98);
-        // obdĺžnik: vzdialenosť k vrchu alebo k bližšej stene
-        const rb = median(ls.map((l, k) => Math.min(Math.abs(hs2[k] - height), Math.abs(l - l0), Math.abs(l - l1))));
-        // kružnica: hľadáme polohu osi c
-        let rc = Infinity, cBest = 0;
-        for (let c = l0 - R; c <= l1 + R; c += 0.005) {
-          const r = median(ls.map((l, k) => Math.abs(Math.hypot(l - c, hs2[k] - R) - R)));
-          if (r < rc) { rc = r; cBest = c; }
-        }
-        if (rc < 0.7 * rb) {
-          shape = 'valec';
-          W = Math.max(W, height);
-          const ux = -lz, uz = lx, mx = cx + lx * cBest, mz = cz + lz * cBest;
-          corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) =>
-            [mx + ux * a * L / 2 + lx * b * W / 2, mz + uz * a * L / 2 + lz * b * W / 2]);
-        }
+      return { round: rc < 0.7 * rb, c: c0, ax, az };
+    };
+    if (height > 0.06 && sub.length >= 40) {
+      let lat = null, lon = null;
+      if (L > 1.1 * height && W < 1.2 * height) lat = circleFit(longAng + Math.PI / 2);
+      if (!(lat && lat.round) && L < 1.2 * height && height > 0.2) lon = circleFit(longAng);
+      if (lat && lat.round) {
+        shape = 'valec';
+        W = Math.max(W, height);
+      } else if (lon && lon.round) {
+        shape = 'koleso';
+        L = Math.max(L, height);
+      }
+      if (shape !== 'krabica') {
+        // rámik: stred posunutý na os oblúka, rozmery doplnené
+        const ux = Math.cos(longAng), uz = Math.sin(longAng), vx = -uz, vz = ux;
+        let mx = cx, mz = cz;
+        if (lat && lat.round) { mx += lat.ax * lat.c; mz += lat.az * lat.c; }
+        else { mx += lon.ax * lon.c; mz += lon.az * lon.c; }
+        corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) =>
+          [mx + ux * a * L / 2 + vx * b * W / 2, mz + uz * a * L / 2 + vz * b * W / 2]);
+        if (W > L) { const t = L; L = W; W = t; }
       }
     }
     return { length: L, width: W, height, corners, shape, cut, floorY, topY: floorY + height, count: comp.length };
@@ -241,7 +267,8 @@
       length: median(list.map(m => m.length)),
       width: median(list.map(m => m.width)),
       height: median(list.map(m => m.height)),
-      shape: list.filter(m => m.shape === 'valec').length * 2 > list.length ? 'valec' : 'krabica',
+      shape: (() => { const c = {}; for (const m of list) c[m.shape || 'krabica'] = (c[m.shape || 'krabica'] || 0) + 1;
+        return Object.keys(c).sort((a, b) => c[b] - c[a])[0]; })(),
       samples: list.length,
     };
   }

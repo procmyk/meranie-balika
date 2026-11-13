@@ -17,6 +17,8 @@ Aplikácia rozpozná **ležiaci valec** (napr. stočený matrac) podľa zaoblen�
 Rozmery sú vždy rozmery kvádra okolo balíka (D × Š × V), podľa nich sa počíta objem, objemová hmotnosť aj kategória. Pri valci sa navyše ukáže jeho skutočný objem.
 Dlhé balíky musia byť celé v zábere. Ak sa balík dotýka okraja obrazu, aplikácia upozorní a tlačidlo nezozelenie. Pomôže odstúpiť alebo otočiť telefón tak, aby balík išiel pozdĺž obrazovky.
 Stojaci valec sa meria ako kváder okolo neho (priemer × priemer × výška).
+**Pneumatiky:** ležiaca sa meria ako kváder okolo nej (priemer × priemer × šírka) a otvor v strede nevadí. Stojaca (na behúni) sa rozpozná ako **◯ koleso** a priemer sa dopočíta z výšky.
+**Dlhé predmety** (napr. krabica s rybárskym prútom): musia byť celé v zábere. Pri 120–150 cm treba odstúpiť asi na 2–2,5 m, telefón otočiť pozdĺž predmetu a počítať s menšou presnosťou (±2–3 cm).
 
 ## Číslo balíka zo štítka
 
