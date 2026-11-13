@@ -32,7 +32,7 @@ class SimulatorPasu:
     """Kamera nad pásom, pás ide v smere osi x obrazu. Pás 1 m, bočné lišty, podlaha haly nižšie."""
 
     def __init__(self, rychlost=1.5, fps=30, vyska_kamery=1.8, naklon_deg=4.0, sum=0.002,
-                 dieri=0.01, sirka_pasu=1.0, seed=1, baliky=None, medzera=(0.3, 0.8)):
+                 dieri=0.01, sirka_pasu=1.0, seed=1, baliky=None, medzera=(0.3, 0.8), krok=1):
         self.intr = Intrinsika(fx=447.0, fy=447.0, cx=424.0, cy=240.0, sirka=848, vyska=480)  # ~ RealSense D455
         self.rychlost, self.fps, self.sum, self.dieri = rychlost, fps, sum, dieri
         self.sirka_pasu = sirka_pasu
@@ -44,7 +44,10 @@ class SimulatorPasu:
         r_nakl = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
         self.R = r_nakl @ r_dole          # svet <- kamera
         self.C = np.array([0.0, 0.0, vyska_kamery])
-        u, v = np.meshgrid(np.arange(self.intr.sirka), np.arange(self.intr.vyska))
+        self.krok = krok
+        self.vypadok = 0       # počet snímok s výpadkom kamery (samé nuly)
+        u, v = np.meshgrid(np.arange(0, self.intr.sirka, krok), np.arange(0, self.intr.vyska, krok))
+        self._tvar = u.shape
         lc = np.stack([(u - self.intr.cx) / self.intr.fx, (v - self.intr.cy) / self.intr.fy, np.ones_like(u, float)], -1)
         self.luce = lc.reshape(-1, 3) @ self.R.T   # smery lúčov vo svete (z kamery = 1 -> t = hĺbka)
         self.cakajuce = list(baliky) if baliky is not None else None
@@ -96,9 +99,14 @@ class SimulatorPasu:
             t = np.minimum(t, self._kvader(o, L, 0.0, yc, 0.0, 50.0, 0.03, 0.06))
         for b in self.na_pase:
             t = np.minimum(t, self._kvader(o, L, b.x, b.y, b.uhol, b.d, b.s, b.v))
-        hlbka = t.reshape(self.intr.vyska, self.intr.sirka).astype(np.float32)
+        hlbka = t.reshape(self._tvar).astype(np.float32)
+        if self.krok > 1:
+            hlbka = np.repeat(np.repeat(hlbka, self.krok, 0), self.krok, 1)[:self.intr.vyska, :self.intr.sirka]
         hlbka *= 1 + self.rng.normal(0, self.sum, hlbka.shape).astype(np.float32) * hlbka  # šum rastie s hĺbkou
         hlbka[self.rng.random(hlbka.shape) < self.dieri] = 0
+        if self.vypadok > 0:
+            self.vypadok -= 1
+            hlbka[:] = 0
         return hlbka
 
     @staticmethod

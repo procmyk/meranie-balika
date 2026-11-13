@@ -13,7 +13,7 @@ import time
 import numpy as np
 
 from pasmeter.kamery import otvor, SimulatorPasu, SimBalik
-from pasmeter.meranie import Kalibracia, Nastavenia, detekuj, Sledovanie
+from pasmeter.meranie import Kalibracia, Nastavenia, analyzuj, Sledovanie
 from pasmeter.vystup import ZapisCSV, suhrn
 from pasmeter.geometria import kategoria
 
@@ -33,23 +33,24 @@ def kalibruj(kamera, nast, snimok=30, subor=KAL_SUBOR):
 
 
 def meraj(kamera, kal, nast, zapis=None, fps=30.0, max_snimok=None, nahlad=False, tichy=False):
-    sled = Sledovanie(nast, fps)
+    sled = Sledovanie(nast, fps, kal)
     vysledky = []
     t0, n = time.time(), 0
 
     def vypis(r):
         vysledky.append(r)
-        riadok = zapis.zapis(r) if zapis else None
+        riadok = zapis.zapis(r, r.get('poznamka', '')) if zapis else None
         if not tichy:
             d, s, v = (round(r[k] * 100) for k in ("dlzka", "sirka", "vyska"))
             print(f"  #{riadok[0] if riadok else len(vysledky):<4} {kategoria(d, s, v):<9} {d:>4} × {s:>3} × {v:>3} cm"
-                  f"  {d * s * v / 1000:7.1f} l   ({r['snimok']} snímok, pás {r['rychlost']:.2f} m/s)", flush=True)
+                  f"  {d * s * v / 1000:7.1f} l   ({r['snimok']} snímok, pás {r['rychlost']:.2f} m/s)"
+                  + (f"  [{r['poznamka']}]" if r.get('poznamka') else ''), flush=True)
 
     try:
         while max_snimok is None or n < max_snimok:
             hlbka = kamera.citaj()
-            det = detekuj(hlbka, kal, nast)
-            for r in sled.krok(det):
+            det, platnost = analyzuj(hlbka, kal, nast)
+            for r in sled.krok(det, platnost):
                 vypis(r)
             n += 1
             if nahlad:
