@@ -25,7 +25,7 @@
   #result .sub { color: #bbb; font-size: 14px; }
   #result .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
   #mode { position: absolute; top: 70px; right: 12px; font-size: 13px; padding: 8px 12px; }
-  #auto { position: absolute; top: 116px; right: 12px; font-size: 13px; padding: 8px 12px; }
+  #act.ok { background: #3ddc84; }
   #count { position: absolute; top: 70px; left: 12px; font-size: 13px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.6); }
   #result input { width: 100%; margin-top: 12px; padding: 12px; border-radius: 10px; border: 1px solid #555; background: #222; color: #fff; font: inherit; }
   #log { width: 100%; max-width: 520px; display: none; flex-direction: column; gap: 10px; }
@@ -60,7 +60,6 @@
   <div id="hint">Inicializujem…</div>
   <button id="mode" class="sec">Ručný režim</button>
   <div id="count"></div>
-  <button id="auto" class="sec">Auto: zap</button>
   <div id="live"></div>
   <div id="bar">
     <button id="act">Nastaviť podlahu</button>
@@ -89,8 +88,8 @@ const M = window.Measure;
 const GRID_COLS = 64, GRID_ROWS = 112;   // vzorkovanie hĺbkovej mapy
 const HISTORY = 25;                        // počet snímok pre medián
 const FINAL_SAMPLES = 8;                   // snímky zbierané po stlačení "Zmerať" (ak ešte nie je dosť histórie)
-const STABLE_N = 8;                        // auto-meranie: počet po sebe idúcich zhodných snímok
-const STABLE_TOL = 0.015;                  // auto-meranie: max. rozptyl rozmeru (m)
+const STABLE_N = 8;                        // počet po sebe idúcich zhodných snímok = "stabilné"
+const STABLE_TOL = 0.015;                  // max. rozptyl rozmeru pre "stabilné" (m)
 const DIST_MIN = 0.45, DIST_MAX = 1.3;     // odporúčaná vzdialenosť od balíka (m)
 
 // ---------- stav ----------
@@ -103,7 +102,7 @@ let latest = null;          // posledná detekcia (na kreslenie)
 let collecting = null;      // pole meraní počas finálneho zberu
 let frozen = null;          // finálny výsledok
 let manual = false;         // ručný režim
-let autoMode = true;        // automaticky zmerať po ustálení
+let stable = false;         // rozmery sú ustálené (indikácia na tlačidle)
 let rejects = 0, lastSeen = -999, boxDist = null;
 let manualPts = [];         // ručné body [x,y,z]
 let frameNo = 0;
@@ -128,7 +127,6 @@ $('exit').onclick = () => session && session.end();
 $('reset').onclick = resetAll;
 $('save').onclick = () => { saveRecord(); resetMeasure(); };
 $('discard').onclick = resetMeasure;
-$('auto').onclick = () => { autoMode = !autoMode; updateUI(); };
 $('exp').onclick = exportCSV;
 $('share').onclick = shareCSV;
 $('clear').onclick = () => {
@@ -191,7 +189,8 @@ function resize() {
 
 function resetAll() { floorY = null; resetMeasure(); }
 function resetMeasure() {
-  history = []; latest = null; collecting = null; frozen = null; manualPts = []; rejects = 0; boxDist = null;
+  history = []; latest = null; collecting = null; frozen = null; manualPts = []; rejects = 0; boxDist = null; stable = false;
+  $('act').classList.remove('ok');
   $('result').style.display = 'none';
   $('note').value = '';
   updateUI();
@@ -214,7 +213,7 @@ function onAction() {
     updateUI(); return;
   }
   if (!collecting && latest) {
-    if (history.length >= 5) showResult(M.aggregate(history.slice(-10)));
+    if (history.length >= 5) showResult(M.aggregate(history.slice(-STABLE_N)));
     else { collecting = []; updateUI(); }
   }
 }
@@ -246,8 +245,6 @@ function updateUI() {
   $('mode').style.display = depthOK ? '' : 'none';
   $('live').style.display = 'none';
   $('count').textContent = `Uložené: ${records.length}`;
-  $('auto').textContent = autoMode ? 'Auto: zap' : 'Auto: vyp';
-  $('auto').style.display = manual ? 'none' : '';
   if (frozen) { hint.textContent = 'Hotovo. Ulož meranie alebo ho zahoď.'; act.style.display = 'none'; return; }
   act.style.display = '';
   if (floorY === null) {
@@ -265,8 +262,9 @@ function updateUI() {
   if (!latest) h = 'Namier krížik na balík zo vzdialenosti ~0,5–1 m, šikmo zhora (cca 45°). Celý balík a kúsok podlahy okolo musia byť v zábere.';
   else if (boxDist !== null && boxDist < DIST_MIN) h = '⬆ Si príliš blízko – odstúp, celý balík musí byť v zábere.';
   else if (boxDist !== null && boxDist > DIST_MAX) h = '⬇ Si príliš ďaleko – podíď bližšie (0,5–1 m).';
-  else h = autoMode ? 'Balík nájdený – drž telefón chvíľu v kľude, zmeria sa sám.' : 'Balík nájdený – stlač Zmerať.';
+  else h = stable ? 'Rozmery sú stabilné ✓ – ak rámik sedí na balíku, stlač Zmerať.' : 'Balík nájdený – drž telefón chvíľu v kľude, kým tlačidlo nezozelenie.';
   hint.textContent = h;
+  act.classList.toggle('ok', !!latest && stable);
   act.textContent = 'Zmerať'; act.disabled = !latest;
 }
 
@@ -404,11 +402,10 @@ function onFrame(t, frame) {
         if (collecting) {
           collecting.push(acc);
           if (collecting.length >= FINAL_SAMPLES) { const r = M.aggregate(collecting); collecting = null; showResult(r); }
-        } else if (autoMode && isStable() && boxDist >= DIST_MIN && boxDist <= DIST_MAX) {
-          showResult(M.aggregate(history.slice(-STABLE_N)));
         }
       } else if (frameNo - lastSeen > 15) { latest = null; boxDist = null; }
-      if (had !== !!latest || prevHint !== hintKey()) updateUI();
+      const st = !!latest && isStable();
+      if (had !== !!latest || prevHint !== hintKey() || st !== stable) { stable = st; updateUI(); }
     }
   }
   draw();
