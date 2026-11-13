@@ -9,7 +9,7 @@ Telefón potrebuje aplikáciu *Google Play Services for AR*.
 2. Namier na balík zo vzdialenosti 0,5–1 m, šikmo zhora (asi 45°), a chvíľu drž telefón v kľude.
    Keď rámik sedí na balíku a tlačidlo zozelenie (rozmery sú stabilné), stlač **Zmerať**.
 
-Ak zariadenie nepodporuje hĺbkovú mapu, použi **Ručný režim** (3 rohy podstavy + vrch balíka).
+**Ručný režim:** zamieriš krížik postupne na 3 rohy balíka dole pri zemi a na vrch balíka, pri každom stlačíš **Bod**.
 
 ## Export meraní
 

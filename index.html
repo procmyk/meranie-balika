@@ -208,20 +208,19 @@ function resetMeasure() {
 
 // ---------- tlačidlo akcie ----------
 function onAction() {
+  if (manual) {
+    const p = targetPoint();
+    if (!p) { flash('Pod krížikom nie je rozpoznaný povrch – pomaly hýb telefónom.'); return; }
+    manualPts.push(p.slice());
+    if (navigator.vibrate) navigator.vibrate(40);
+    if (manualPts.length === 4) finishManual();
+    updateUI(); return;
+  }
   if (floorY === null) {
     const g = lastHit ? lastHit[1] : floorGuess();
     if (g === null) return;
     setFloor(g, lastHit ? 'rovina' : 'hĺbka');
     return;
-  }
-  if (manual) {
-    if (manualPts.length < 3) { if (lastHit) manualPts.push(lastHit); }
-    else if (manualPts.length === 3) {
-      // výška: bod na vrchu balíka – z hĺbky v strede obrazu, inak z hit-testu
-      const top = centerPoint || lastAnyHit;
-      if (top) { manualPts.push(top); finishManual(); }
-    }
-    updateUI(); return;
   }
   if (!collecting && latest) {
     if (history.length >= 5) showResult(M.aggregate(history.slice(-STABLE_N)));
@@ -229,10 +228,11 @@ function onAction() {
   }
 }
 
+function manualFloor() { return (manualPts[0][1] + manualPts[1][1] + manualPts[2][1]) / 3; }
 function finishManual() {
   const [a, b, c, t] = manualPts;
   const dist = (p, q) => Math.hypot(p[0] - q[0], p[2] - q[2]);
-  const L = dist(a, b), W = dist(b, c), H = t[1] - floorY;
+  const L = dist(a, b), W = dist(b, c), H = t[1] - manualFloor();
   showResult({ length: Math.max(L, W), width: Math.min(L, W), height: H, samples: 1 });
 }
 
@@ -252,6 +252,9 @@ function showResult(r) {
   updateUI();
 }
 
+let flashMsg = '', flashT = 0;
+function flash(m) { flashMsg = m; clearTimeout(flashT); updateUI(); flashT = setTimeout(() => { flashMsg = ''; updateUI(); }, 2500); }
+
 function updateUI() {
   const act = $('act'), hint = $('hint');
   $('mode').textContent = manual ? 'Automatický režim' : 'Ručný režim';
@@ -260,15 +263,15 @@ function updateUI() {
   $('count').textContent = `Uložené: ${records.length}`;
   if (frozen) { hint.textContent = 'Hotovo. Ulož meranie alebo ho zahoď.'; act.style.display = 'none'; return; }
   act.style.display = '';
+  if (manual) {
+    const steps = ['1. roh balíka dole pri zemi', '2. roh dole (susedný)', '3. roh dole (susedný k 2.)', 'vrch balíka (kdekoľvek na hornej stene)'];
+    hint.textContent = flashMsg || `Ručný režim ${manualPts.length + 1}/4: zamier krížik na ${steps[manualPts.length]} a stlač Bod.` +
+      (depthOK ? '' : ' (Zariadenie nepodporuje hĺbkovú mapu – body len z rozpoznaných plôch.)');
+    act.textContent = 'Bod'; act.disabled = false; return;
+  }
   if (floorY === null) {
     hint.textContent = 'Namier na voľnú podlahu vedľa balíka (asi 1 m pred sebou) a pomaly hýb telefónom do strán. Podlaha sa nastaví sama.';
     act.textContent = 'Nastaviť podlahu'; act.disabled = !lastHit && !floorGuess(); return;
-  }
-  if (manual) {
-    const steps = ['1. roh podstavy', '2. roh (susedný)', '3. roh (susedný k 2.)', 'vrch balíka'];
-    hint.textContent = `Ručný režim: zamier krížik na ${steps[manualPts.length]} a stlač Bod.` +
-      (depthOK ? '' : ' (Zariadenie nepodporuje hĺbkovú mapu.)');
-    act.textContent = 'Bod'; act.disabled = false; return;
   }
   if (collecting) { hint.textContent = 'Meriam… drž telefón v kľude.'; act.disabled = true; act.textContent = 'Meriam…'; return; }
   let h;
@@ -370,16 +373,22 @@ renderLog();
 let centerPoint = null, lastAnyHit = null;
 const grid = { cols: GRID_COLS, rows: GRID_ROWS, pts: new Float32Array(GRID_COLS * GRID_ROWS * 3) };
 
+let frameErr = '';
 function onFrame(t, frame) {
   if (!session) return;
   session.requestAnimationFrame(onFrame);
+  try { frameBody(frame); }
+  catch (e) { frameErr = e.message || String(e); $('diag').textContent = 'Chyba: ' + frameErr; }
+}
+
+function frameBody(frame) {
   frameNo++;
   const layer = session.renderState.baseLayer;
   gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
   gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
 
   const pose = frame.getViewerPose(refSpace);
-  if (!pose) return;
+  if (!pose) { if (frameNo % 10 === 0) $('diag').textContent = 'Sledovanie polohy… pomaly hýb telefónom'; return; }
   const view = pose.views[0];
   const proj = view.projectionMatrix, viewMat = view.transform.matrix;
   lastView = { proj, viewInv: view.transform.inverse.matrix, camY: viewMat[13] };
@@ -443,6 +452,9 @@ function onFrame(t, frame) {
   if (frameNo % 10 === 0) diag(hits.length);
   draw();
 }
+
+// Bod pod krížikom: z hĺbkovej mapy, inak z hit-testu (akákoľvek plocha).
+function targetPoint() { return centerPoint || lastAnyHit; }
 
 // ---------- podlaha ----------
 let depthFloor = null;
@@ -544,9 +556,12 @@ function draw() {
   ctx.clearRect(0, 0, innerWidth, innerHeight);
   const cx = innerWidth / 2, cy = innerHeight / 2;
 
-  // krížik v strede
+  // krížik v strede + bod: žltý = povrch rozpoznaný, červený krúžok = nič
   ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(cx - 14, cy); ctx.lineTo(cx + 14, cy); ctx.moveTo(cx, cy - 14); ctx.lineTo(cx, cy + 14); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx - 22, cy); ctx.lineTo(cx - 8, cy); ctx.moveTo(cx + 8, cy); ctx.lineTo(cx + 22, cy);
+  ctx.moveTo(cx, cy - 22); ctx.lineTo(cx, cy - 8); ctx.moveTo(cx, cy + 8); ctx.lineTo(cx, cy + 22); ctx.stroke();
+  if (targetPoint()) { ctx.fillStyle = '#ffcc00'; ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 7); ctx.fill(); }
+  else { ctx.strokeStyle = '#ff5252'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 7); ctx.stroke(); }
 
   // značka zásahu podlahy
   const ring = floorY === null || manual ? (lastHit || (floorY === null && depthFloor !== null && centerPoint ? [centerPoint[0], depthFloor, centerPoint[2]] : null)) : null;
@@ -583,14 +598,13 @@ function drawManual() {
   const cm = (p, q) => Math.round(Math.hypot(p[0] - q[0], p[2] - q[2]) * 100) + ' cm';
   if (pts.length >= 2) { line(pts[0], pts[1], '#ffcc00'); label(mid(pts[0], pts[1]), cm(pts[0], pts[1])); }
   if (pts.length >= 3) { line(pts[1], pts[2], '#ffcc00'); label(mid(pts[1], pts[2]), cm(pts[1], pts[2])); }
-  // živý náhľad ďalšej úsečky
-  if (!frozen && pts.length && pts.length < 3 && lastHit) line(pts[pts.length - 1], lastHit, 'rgba(255,204,0,.5)', 2);
-  if (!frozen && pts.length === 3) {
-    const top = centerPoint || lastAnyHit;
-    if (top) {
-      label([top[0], top[1], top[2]], 'V ' + Math.round((top[1] - floorY) * 100) + ' cm');
-    }
+  // živý náhľad ďalšej úsečky / výšky
+  const tp = targetPoint();
+  if (!frozen && tp && pts.length && pts.length < 3) {
+    line(pts[pts.length - 1], tp, 'rgba(255,204,0,.6)', 2);
+    label(mid(pts[pts.length - 1], tp), Math.round(Math.hypot(tp[0] - pts[pts.length - 1][0], tp[2] - pts[pts.length - 1][2]) * 100) + ' cm');
   }
+  if (!frozen && tp && pts.length === 3) label(tp, 'V ' + Math.round((tp[1] - manualFloor()) * 100) + ' cm');
 }
 function mid(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]; }
 </script>
