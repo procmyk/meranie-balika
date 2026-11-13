@@ -25,6 +25,15 @@
   #result .sub { color: #bbb; font-size: 14px; }
   #result .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
   #mode { position: absolute; top: 70px; right: 12px; font-size: 13px; padding: 8px 12px; }
+  #count { position: absolute; top: 70px; left: 12px; font-size: 13px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.6); }
+  #result input { width: 100%; margin-top: 12px; padding: 12px; border-radius: 10px; border: 1px solid #555; background: #222; color: #fff; font: inherit; }
+  #log { width: 100%; max-width: 520px; display: none; flex-direction: column; gap: 10px; }
+  #log .btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  #log .btns button { padding: 10px 14px; font-size: 14px; }
+  #logtable { max-height: 35vh; overflow: auto; border-radius: 10px; background: #1c1c1c; }
+  #logtable table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #logtable th, #logtable td { padding: 6px 8px; border-bottom: 1px solid #333; text-align: right; white-space: nowrap; }
+  #logtable th:nth-child(2), #logtable td:nth-child(2) { text-align: left; }
 </style>
 </head>
 <body>
@@ -33,6 +42,15 @@
   <p>Polož balík na zem, spusti meranie a nasleduj pokyny. Aplikácia nájde krabicu automaticky pomocou hĺbkovej kamery (ARCore).</p>
   <button id="go" disabled>Spustiť meranie</button>
   <div id="err"></div>
+  <div id="log">
+    <b id="logsum"></b>
+    <div id="logtable"></div>
+    <div class="btns">
+      <button id="exp">⬇ Export (Excel)</button>
+      <button id="share" class="sec">Zdieľať</button>
+      <button id="clear" class="sec">Vymazať</button>
+    </div>
+  </div>
   <p style="font-size:13px">Vyžaduje Android, Chrome a <i>Google Play Services for AR</i>.</p>
 </div>
 
@@ -40,6 +58,7 @@
   <canvas id="c2d"></canvas>
   <div id="hint">Inicializujem…</div>
   <button id="mode" class="sec">Ručný režim</button>
+  <div id="count"></div>
   <div id="live"></div>
   <div id="bar">
     <button id="act">Nastaviť podlahu</button>
@@ -50,9 +69,10 @@
     <div class="sub">Rozmery balíka (D × Š × V)</div>
     <div class="dims" id="rdims"></div>
     <div class="sub" id="rsub"></div>
+    <input id="note" placeholder="Číslo balíka / poznámka (nepovinné)" autocomplete="off">
     <div class="row">
-      <button id="copy" class="sec">Kopírovať</button>
-      <button id="again">Merať ďalší</button>
+      <button id="discard" class="sec">Zahodiť</button>
+      <button id="save">Uložiť a merať ďalší</button>
     </div>
   </div>
 </div>
@@ -99,12 +119,16 @@ function fail(msg) { $('err').textContent = msg; }
 $('go').onclick = start;
 $('exit').onclick = () => session && session.end();
 $('reset').onclick = resetAll;
-$('again').onclick = resetMeasure;
-$('mode').onclick = () => { manual = !manual; resetMeasure(); updateUI(); };
-$('copy').onclick = () => {
-  const t = $('rdims').textContent;
-  navigator.clipboard && navigator.clipboard.writeText(t).then(() => { $('copy').textContent = 'Skopírované ✓'; });
+$('save').onclick = () => { saveRecord(); resetMeasure(); };
+$('discard').onclick = resetMeasure;
+$('exp').onclick = exportCSV;
+$('share').onclick = shareCSV;
+$('clear').onclick = () => {
+  if (!records.length) return;
+  if ($('clear').dataset.sure) { records = []; persist(); renderLog(); }
+  else { $('clear').dataset.sure = 1; $('clear').textContent = 'Naozaj vymazať?'; setTimeout(() => { delete $('clear').dataset.sure; $('clear').textContent = 'Vymazať'; }, 3000); }
 };
+$('mode').onclick = () => { manual = !manual; resetMeasure(); updateUI(); };
 $('act').onclick = onAction;
 
 // ---------- spustenie session ----------
@@ -145,7 +169,7 @@ async function start() {
   session.addEventListener('end', () => {
     $('overlay').style.display = 'none';
     $('start').style.display = 'flex';
-    session = null; resetAll();
+    session = null; resetAll(); renderLog();
   });
   resetAll();
   session.requestAnimationFrame(onFrame);
@@ -161,7 +185,7 @@ function resetAll() { floorY = null; resetMeasure(); }
 function resetMeasure() {
   history = []; latest = null; collecting = null; frozen = null; manualPts = [];
   $('result').style.display = 'none';
-  $('copy').textContent = 'Kopírovať';
+  $('note').value = '';
   updateUI();
 }
 
@@ -193,6 +217,8 @@ function finishManual() {
 
 function showResult(r) {
   frozen = r;
+  frozen.mode = manual ? 'ručný' : 'automatický';
+  frozen.time = new Date();
   const cm = v => Math.round(v * 100);
   const L = cm(r.length), W = cm(r.width), H = cm(r.height);
   $('rdims').textContent = `${L} × ${W} × ${H} cm`;
@@ -208,7 +234,8 @@ function updateUI() {
   $('mode').textContent = manual ? 'Automatický režim' : 'Ručný režim';
   $('mode').style.display = depthOK ? '' : 'none';
   $('live').style.display = 'none';
-  if (frozen) { hint.textContent = 'Hotovo.'; act.style.display = 'none'; return; }
+  $('count').textContent = `Uložené: ${records.length}`;
+  if (frozen) { hint.textContent = 'Hotovo. Ulož meranie alebo ho zahoď.'; act.style.display = 'none'; return; }
   act.style.display = '';
   if (floorY === null) {
     hint.textContent = 'Namier na podlahu vedľa balíka a pomaly hýb telefónom, kým sa neobjaví zelený kruh.';
@@ -226,6 +253,75 @@ function updateUI() {
     : 'Namier stred obrazovky na balík zo vzdialenosti ~0,5–1,5 m, mierne zhora.';
   act.textContent = 'Zmerať'; act.disabled = !latest;
 }
+
+// ---------- uložené merania ----------
+const STORE = 'meranie-balika-zaznamy';
+let records = [];
+try { records = JSON.parse(localStorage.getItem(STORE)) || []; } catch (e) { records = []; }
+function persist() { try { localStorage.setItem(STORE, JSON.stringify(records)); } catch (e) {} }
+
+function saveRecord() {
+  if (!frozen) return;
+  const cm = v => Math.round(v * 100);
+  const L = cm(frozen.length), W = cm(frozen.width), H = cm(frozen.height);
+  records.push({
+    n: records.length ? records[records.length - 1].n + 1 : 1,
+    time: frozen.time.toISOString(),
+    L, W, H,
+    liters: +(L * W * H / 1000).toFixed(1),
+    volKg: +(L * W * H / 5000).toFixed(1),
+    note: $('note').value.trim(),
+    mode: frozen.mode,
+  });
+  persist();
+}
+
+const pad = n => String(n).padStart(2, '0');
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderLog() {
+  $('log').style.display = records.length ? 'flex' : 'none';
+  if (!records.length) return;
+  const totL = records.reduce((a, r) => a + r.liters, 0);
+  $('logsum').textContent = `Uložené merania: ${records.length} · spolu ${totL.toFixed(1).replace(".", ",")} l`;
+  $('logtable').innerHTML = '<table><tr><th>#</th><th>Čas</th><th>D×Š×V cm</th><th>l</th><th>Pozn.</th></tr>' +
+    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td>${fmtTime(r.time)}</td><td>${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.note)}</td></tr>`).join('') +
+    '</table>';
+}
+
+// CSV pre slovenský Excel: oddeľovač ";", desatinná čiarka, UTF-8 s BOM
+function buildCSV() {
+  const q = v => { const s = String(v); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const num = v => String(v).replace('.', ',');
+  const rows = [['Poradie', 'Dátum a čas', 'Dĺžka (cm)', 'Šírka (cm)', 'Výška (cm)', 'Objem (l)', 'Objemová hmotnosť (kg, ÷5000)', 'Číslo balíka / poznámka', 'Režim']];
+  for (const r of records) rows.push([r.n, fmtTime(r.time), r.L, r.W, r.H, num(r.liters), num(r.volKg), r.note, r.mode]);
+  const tot = records.reduce((a, r) => a + r.liters, 0);
+  rows.push([]);
+  rows.push(['Počet balíkov', records.length]);
+  rows.push(['Objem spolu (l)', num(tot.toFixed(1))]);
+  return '\ufeff' + rows.map(r => r.map(q).join(';')).join('\r\n');
+}
+function csvName() { const d = new Date(); return `merania_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.csv`; }
+
+function exportCSV() {
+  const blob = new Blob([buildCSV()], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = csvName();
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+async function shareCSV() {
+  const file = new File([buildCSV()], csvName(), { type: 'text/csv' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Merania balíkov' }); } catch (e) {}
+  } else exportCSV();
+}
+renderLog();
 
 // ---------- hlavná slučka ----------
 let centerPoint = null, lastAnyHit = null;
