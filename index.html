@@ -47,6 +47,9 @@
   #scanbar button.on { background: #ffcc00; color: #111; }
   #result input { width: 100%; margin-top: 12px; padding: 12px; border-radius: 10px; border: 1px solid #555; background: #222; color: #fff; font: inherit; }
   #log { width: 100%; max-width: 520px; display: none; flex-direction: column; gap: 10px; }
+  #fname { display: flex; align-items: center; gap: 6px; }
+  #fname input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid #555; background: #222; color: #fff; font: inherit; font-size: 15px; }
+  #fname span { color: #999; font-size: 15px; }
   #log .btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
   #log .btns button { padding: 10px 14px; font-size: 14px; }
   #logtable { max-height: 35vh; overflow: auto; border-radius: 10px; background: #1c1c1c; }
@@ -65,6 +68,9 @@
     <b id="logsum"></b>
     <div id="catsum"></div>
     <div id="logtable"></div>
+    <label for="fnameIn" style="font-size:13px;color:#bbb;text-align:left">Názov exportovaného súboru</label>
+    <div id="fname"><input id="fnameIn" autocomplete="off" spellcheck="false"><span>.csv</span></div>
+    <div id="fnameOut" style="font-size:12px;color:#888;text-align:left;margin-top:-4px"></div>
     <div class="btns">
       <button id="exp">⬇ Export (Excel)</button>
       <button id="share" class="sec">Zdieľať</button>
@@ -182,6 +188,7 @@ $('torch').onclick = () => setTorch(!torchOn);
 $('zoom').onclick = () => setZoom(zoomOn ? 1 : 2);
 $('discard').onclick = () => { resetMeasure(); resumeAR(); };
 $('exp').onclick = exportCSV;
+$('fnameIn').oninput = () => { if ($('fnameIn').value.trim()) $('fnameIn').dataset.custom = 1; else delete $('fnameIn').dataset.custom; showFname(); };
 $('share').onclick = shareCSV;
 $('clear').onclick = () => {
   if (!records.length) return;
@@ -488,6 +495,9 @@ function shortTime(iso) { const d = new Date(iso); return `${d.getDate()}.${d.ge
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function renderLog() {
+  const fi = $('fnameIn');
+  if (!fi.dataset.custom) fi.value = defaultName();
+  showFname();
   $('log').style.display = records.length ? 'flex' : 'none';
   if (!records.length) return;
   const totL = records.reduce((a, r) => a + r.liters, 0);
@@ -523,7 +533,19 @@ function buildCSV() {
     records.length ? num((100 * c.count / records.length).toFixed(1)) + ' %' : '0 %']);
   return '\ufeff' + rows.map(r => r.map(q).join(';')).join('\r\n');
 }
-function csvName() { const d = new Date(); return `merania_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.csv`; }
+function defaultName() { const d = new Date(); return `merania_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
+// Názov zadaný používateľom (bez znakov, ktoré súbory nesmú obsahovať); prázdny = predvolený s dátumom.
+// Diakritika a znaky mimo ASCII sa odstránia: niektoré prehliadače inak súbor premenujú na „download“.
+function csvName() {
+  let n = ($('fnameIn').value || '').trim().replace(/\.csv$/i, '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')          // á -> a, č -> c, ô -> o …
+    .replace(/[–—]/g, '-')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/[^\x20-\x7e]+/g, '_')
+    .replace(/\s+/g, ' ').slice(0, 80).trim().replace(/[. ]+$/, '');
+  return (n || defaultName()) + '.csv';
+}
+function showFname() { $('fnameOut').textContent = 'Súbor: ' + csvName(); }
 
 function exportCSV() {
   const blob = new Blob([buildCSV()], { type: 'text/csv;charset=utf-8' });

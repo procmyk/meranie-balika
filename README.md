@@ -35,6 +35,7 @@ Ak je balík s rovnakým číslom už uložený, aplikácia upozorní a uloží 
 Po meraní môžeš doplniť číslo balíka alebo poznámku a dať **Uložiť a merať ďalší**. Merania sa ukladajú v telefóne.
 Po stlačení **Koniec** je na úvodnej obrazovke zoznam meraní a tlačidlá:
 
+- **Názov exportovaného súboru:** predvolený je `merania_dátum_čas`, dá sa prepísať (napr. podľa zákazníka). Diakritika sa z názvu odstráni, aby súbor fungoval na každom zariadení.
 - **Export (Excel)** stiahne súbor CSV (poradie, číslo balíka, kategória, dátum a čas, D × Š × V v cm, objem v litroch, objemová hmotnosť, poznámka, režim, počet balíkov a objem spolu).
 - **Zdieľať** pošle súbor napríklad e-mailom alebo cez WhatsApp.
 - **Vymazať** zmaže všetky uložené merania.
