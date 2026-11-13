@@ -257,6 +257,26 @@
         if (W > L) { const t = L; L = W; W = t; }
       }
     }
+    // Pneumatika? Typické rozmery (priemer 40–110 cm, šírka 10–45 cm) a:
+    //  - ležiaca: okrúhly pôdorys a v strede otvor, cez ktorý kamera vidí podlahu,
+    //  - stojaca: rozpoznaná ako koleso (kruhový profil po dĺžke).
+    const D = L, T = shape === 'koleso' ? W : height;
+    const tireSize = D >= 0.4 && D <= 1.1 && T >= 0.1 && T <= 0.45 && T < 0.6 * D;
+    if (tireSize && shape === 'koleso') shape = 'pneumatika';
+    else if (tireSize && shape === 'krabica' && W > 0.85 * L) {
+      const mx = (corners[0][0] + corners[2][0]) / 2, mz = (corners[0][1] + corners[2][1]) / 2;
+      const rIn = 0.25 * L;
+      let low = 0, high = 0;
+      for (let i = 0; i < n; i++) {
+        const y = pts[i * 3 + 1];
+        if (y !== y) continue;
+        const dx = pts[i * 3] - mx, dz = pts[i * 3 + 2] - mz;
+        if (dx * dx + dz * dz > rIn * rIn) continue;
+        const h = y - floorY;
+        if (h < 0.3 * height) low++; else if (h > 0.7 * height) high++;
+      }
+      if (low >= 3 && low > 2 * high) shape = 'pneumatika';
+    }
     return { length: L, width: W, height, corners, shape, cut, floorY, topY: floorY + height, count: comp.length };
   }
 
