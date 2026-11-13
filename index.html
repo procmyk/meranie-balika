@@ -99,7 +99,7 @@
   </div>
   <div id="result">
     <div class="sub">Rozmery balíka (D × Š × V)</div>
-    <div id="rcat" class="cat"></div>
+    <div id="rcat" class="cat"></div> <div id="rshape" class="cat" style="background:#ddd;display:none">⬭ valec</div>
     <div class="dims" id="rdims"></div>
     <div class="sub" id="rsub"></div>
     <div class="coderow">
@@ -128,6 +128,8 @@ const FINAL_SAMPLES = 8;                   // snímky zbierané po stlačení "Z
 const STABLE_N = 8;                        // počet po sebe idúcich zhodných snímok = "stabilné"
 const STABLE_TOL = 0.015;                  // max. rozptyl rozmeru pre "stabilné" (m)
 const DIST_MIN = 0.45, DIST_MAX = 1.3;     // odporúčaná vzdialenosť od balíka (m)
+// dlhý balík (napr. stočený matrac) sa do záberu zmestí len z väčšej diaľky
+const distMax = () => latest ? Math.max(DIST_MAX, 1.8 * latest.length + 0.3) : DIST_MAX;
 
 // ---------- stav ----------
 let session, refSpace, viewerSpace, hitSource, gl;
@@ -285,14 +287,17 @@ function finishManual() {
 function showResult(r) {
   frozen = r;
   frozen.mode = manual ? 'ručný' : 'automatický';
+  frozen.shape = manual ? '' : (r.shape || 'krabica');
   frozen.time = new Date();
   const cm = v => Math.round(v * 100);
   const L = cm(r.length), W = cm(r.width), H = cm(r.height);
   $('rdims').textContent = `${L} × ${W} × ${H} cm`;
   const cat = M.categorize(L, W, H);
   $('rcat').textContent = cat.id; $('rcat').style.background = cat.color;
+  $('rshape').style.display = r.shape === 'valec' ? 'inline-block' : 'none';
   const vol = (L * W * H) / 1000;
-  $('rsub').textContent = `Objem ${vol.toFixed(1).replace('.', ',')} l · objemová hmotnosť ${(L * W * H / 5000).toFixed(1).replace('.', ',')} kg (÷5000)` +
+  const cyl = r.shape === 'valec' ? ` (valec ≈ ${(Math.PI / 4 * vol).toFixed(1).replace('.', ',')} l)` : '';
+  $('rsub').textContent = `Objem ${vol.toFixed(1).replace('.', ',')} l${cyl} · objemová hmotnosť ${(L * W * H / 5000).toFixed(1).replace('.', ',')} kg (÷5000)` +
     (r.samples > 1 ? ` · ${r.samples} snímok` : '');
   $('result').style.display = 'block';
   updateUI();
@@ -322,8 +327,9 @@ function updateUI() {
   if (collecting) { hint.textContent = 'Meriam… drž telefón v kľude.'; act.disabled = true; act.textContent = 'Meriam…'; return; }
   let h;
   if (!latest) h = 'Namier krížik na balík zo vzdialenosti ~0,5–1 m, šikmo zhora (cca 45°). Celý balík a kúsok podlahy okolo musia byť v zábere.';
+  else if (latest.cut) h = '↔ Balík nie je celý v zábere – odstúp, alebo otoč telefón tak, aby balík išiel pozdĺž obrazovky.';
   else if (boxDist !== null && boxDist < DIST_MIN) h = '⬆ Si príliš blízko – odstúp, celý balík musí byť v zábere.';
-  else if (boxDist !== null && boxDist > DIST_MAX) h = '⬇ Si príliš ďaleko – podíď bližšie (0,5–1 m).';
+  else if (boxDist !== null && boxDist > distMax()) h = '⬇ Si príliš ďaleko – podíď bližšie (0,5–1 m).';
   else h = stable ? 'Rozmery sú stabilné ✓ – ak rámik sedí na balíku, stlač Zmerať.' : 'Balík nájdený – drž telefón chvíľu v kľude, kým tlačidlo nezozelenie.';
   hint.textContent = h;
   act.classList.toggle('ok', !!latest && stable);
@@ -464,6 +470,7 @@ function saveRecord() {
     code: $('code').value.trim(),
     note: $('note').value.trim(),
     mode: frozen.mode,
+    shape: frozen.shape || '',
   });
   persist();
 }
@@ -484,7 +491,7 @@ function renderLog() {
   $('catsum').innerHTML = catStats().filter(c => c.count).map(c =>
     `<span><span class="cat small" style="background:${c.color}">${c.id}</span> ${c.count} ks · ${c.liters.toFixed(1).replace('.', ',')} l</span>`).join('');
   $('logtable').innerHTML = '<table><tr><th>#</th><th>Kat.</th><th>Čas</th><th>D×Š×V cm</th><th>l</th><th>Číslo balíka</th></tr>' +
-    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td><span class="cat small" style="background:${catOf(r).color}">${catOf(r).id}</span></td><td>${shortTime(r.time)}</td><td>${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.code || '')}${r.note ? ` <span style="color:#999">${esc(r.note)}</span>` : ''}</td></tr>`).join('') +
+    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td><span class="cat small" style="background:${catOf(r).color}">${catOf(r).id}</span></td><td>${shortTime(r.time)}</td><td>${r.shape === 'valec' ? '⬭ ' : ''}${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.code || '')}${r.note ? ` <span style="color:#999">${esc(r.note)}</span>` : ''}</td></tr>`).join('') +
     '</table>';
 }
 
@@ -500,8 +507,8 @@ function catStats() {
 function buildCSV() {
   const q = v => { const s = String(v); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const num = v => String(v).replace('.', ',');
-  const rows = [['Poradie', 'Číslo balíka', 'Kategória', 'Dátum a čas', 'Dĺžka (cm)', 'Šírka (cm)', 'Výška (cm)', 'Objem (l)', 'Objemová hmotnosť (kg, ÷5000)', 'Poznámka', 'Režim']];
-  for (const r of records) rows.push([r.n, r.code || '', catOf(r).id, fmtTime(r.time), r.L, r.W, r.H, num(r.liters), num(r.volKg), r.note, r.mode]);
+  const rows = [['Poradie', 'Číslo balíka', 'Kategória', 'Dátum a čas', 'Dĺžka (cm)', 'Šírka (cm)', 'Výška (cm)', 'Objem (l)', 'Objemová hmotnosť (kg, ÷5000)', 'Tvar', 'Poznámka', 'Režim']];
+  for (const r of records) rows.push([r.n, r.code || '', catOf(r).id, fmtTime(r.time), r.L, r.W, r.H, num(r.liters), num(r.volKg), r.shape || '', r.note, r.mode]);
   const tot = records.reduce((a, r) => a + r.liters, 0);
   rows.push([]);
   rows.push(['Počet balíkov', records.length]);
@@ -605,7 +612,7 @@ function frameBody(frame) {
           if (collecting.length >= FINAL_SAMPLES) { const r = M.aggregate(collecting); collecting = null; showResult(r); }
         }
       } else if (frameNo - lastSeen > 15) { latest = null; boxDist = null; }
-      const st = !!latest && isStable();
+      const st = !!latest && !latest.cut && isStable();
       if (had !== !!latest || prevHint !== hintKey() || st !== stable) { stable = st; updateUI(); }
     }
   }
@@ -660,7 +667,7 @@ function diag(nHits) {
 }
 
 function hintKey() {
-  return !latest ? 0 : boxDist === null ? 1 : boxDist < DIST_MIN ? 2 : boxDist > DIST_MAX ? 3 : 1;
+  return !latest ? 0 : latest.cut ? 4 : boxDist === null ? 1 : boxDist < DIST_MIN ? 2 : boxDist > distMax() ? 3 : 1;
 }
 
 function isStable() {
@@ -746,7 +753,7 @@ function draw() {
     line(b[i], t[i], color, 3);
   }
   const cm = v => Math.round(v * 100);
-  $('live').textContent = `${cm(agg.length)} × ${cm(agg.width)} × ${cm(agg.height)} cm`;
+  $('live').textContent = `${agg.shape === 'valec' ? '⬭ ' : ''}${cm(agg.length)} × ${cm(agg.width)} × ${cm(agg.height)} cm`;
   $('live').style.display = frozen ? 'none' : 'block';
 }
 

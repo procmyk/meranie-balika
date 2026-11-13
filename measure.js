@@ -175,15 +175,63 @@
       }
     }
     if (comp.length < opts.minPts) return null;
+    // dotýka sa balík okraja obrazu? -> nie je celý v zábere, rozmery by boli skreslené
+    let cut = false;
+    for (const i of comp) {
+      const r = (i / cols) | 0, c = i - r * cols;
+      if (r === 0 || c === 0 || r === rows - 1 || c === cols - 1) { cut = true; break; }
+    }
 
     const hs = comp.map(i => pts[i*3+1] - floorY).sort((a, b) => a - b);
     const hTop = percentile(hs, 0.95);
     const top = comp.filter(i => pts[i*3+1] - floorY > hTop - opts.topBand);
     if (top.length < opts.minPts / 2) return null;
     const height = median(top.map(i => pts[i*3+1] - floorY));
-    const rect = robustRect(top.map(i => [pts[i*3], pts[i*3+2]]));
-    const L = Math.max(rect.lenU, rect.lenV), W = Math.min(rect.lenU, rect.lenV);
-    return { length: L, width: W, height, corners: rect.corners, floorY, topY: floorY + height, count: comp.length };
+    // Pôdorys z hornej polovice balíka: pri krabici = vrchná stena + horné časti bokov,
+    // pri valci / vreci zachytí najširšie miesto (samotný vrch je pri valci len úzky pásik).
+    // Spodnú polovicu vynechávame – na hranách tam býva šum (hĺbka „preteká“ na podlahu).
+    let foot = comp.filter(i => pts[i*3+1] - floorY > 0.5 * height);
+    if (foot.length < top.length) foot = top;
+    const rect = robustRect(foot.map(i => [pts[i*3], pts[i*3+2]]));
+    let L = Math.max(rect.lenU, rect.lenV), W = Math.min(rect.lenU, rect.lenV);
+    let corners = rect.corners, shape = 'krabica';
+
+    // Ležiaci valec (napr. stočený matrac)? Priečny rez (priečna poloha × výška) porovnáme
+    // s kružnicou (polomer = výška/2, leží na podlahe) a s obdĺžnikom (vrch + zvislé steny).
+    const cx = (corners[0][0] + corners[2][0]) / 2, cz = (corners[0][1] + corners[2][1]) / 2;
+    const ang = rect.lenU >= rect.lenV ? rect.angle + Math.PI / 2 : rect.angle;   // priečny smer
+    const lx = Math.cos(ang), lz = Math.sin(ang);
+    const R = height / 2;
+    if (height > 0.06 && L > 1.1 * height && W < 1.2 * height) {
+      const sel = comp.filter(i => pts[i*3+1] - floorY > 0.15 * height);
+      const step = Math.max(1, Math.floor(sel.length / 1500));
+      const ls = [], hs2 = [];
+      for (let k = 0; k < sel.length; k += step) {
+        const i = sel[k];
+        ls.push((pts[i*3] - cx) * lx + (pts[i*3+2] - cz) * lz);
+        hs2.push(pts[i*3+1] - floorY);
+      }
+      if (ls.length >= 40) {
+        const sl = ls.slice().sort((a, b) => a - b);
+        const l0 = percentile(sl, 0.02), l1 = percentile(sl, 0.98);
+        // obdĺžnik: vzdialenosť k vrchu alebo k bližšej stene
+        const rb = median(ls.map((l, k) => Math.min(Math.abs(hs2[k] - height), Math.abs(l - l0), Math.abs(l - l1))));
+        // kružnica: hľadáme polohu osi c
+        let rc = Infinity, cBest = 0;
+        for (let c = l0 - R; c <= l1 + R; c += 0.005) {
+          const r = median(ls.map((l, k) => Math.abs(Math.hypot(l - c, hs2[k] - R) - R)));
+          if (r < rc) { rc = r; cBest = c; }
+        }
+        if (rc < 0.7 * rb) {
+          shape = 'valec';
+          W = Math.max(W, height);
+          const ux = -lz, uz = lx, mx = cx + lx * cBest, mz = cz + lz * cBest;
+          corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) =>
+            [mx + ux * a * L / 2 + lx * b * W / 2, mz + uz * a * L / 2 + lz * b * W / 2]);
+        }
+      }
+    }
+    return { length: L, width: W, height, corners, shape, cut, floorY, topY: floorY + height, count: comp.length };
   }
 
   // Zhrnutie viacerych meranii (median kazdeho rozmeru).
@@ -193,6 +241,7 @@
       length: median(list.map(m => m.length)),
       width: median(list.map(m => m.width)),
       height: median(list.map(m => m.height)),
+      shape: list.filter(m => m.shape === 'valec').length * 2 > list.length ? 'valec' : 'krabica',
       samples: list.length,
     };
   }

@@ -11,6 +11,13 @@ Telefón potrebuje aplikáciu *Google Play Services for AR*.
 
 **Ručný režim:** zamieriš krížik postupne na 3 rohy balíka dole pri zemi a na vrch balíka, pri každom stlačíš **Bod**.
 
+## Valce a nepravidelné balíky
+
+Aplikácia rozpozná **ležiaci valec** (napr. stočený matrac) podľa zaobleného profilu. Šírku dopočíta ako priemer (= výška), lebo zadnú stranu valca kamera nevidí. Vo výsledku sa zobrazí štítok **⬭ valec** a v exporte stĺpec *Tvar*.
+Rozmery sú vždy rozmery kvádra okolo balíka (D × Š × V), podľa nich sa počíta objem, objemová hmotnosť aj kategória. Pri valci sa navyše ukáže jeho skutočný objem.
+Dlhé balíky musia byť celé v zábere. Ak sa balík dotýka okraja obrazu, aplikácia upozorní a tlačidlo nezozelenie. Pomôže odstúpiť alebo otočiť telefón tak, aby balík išiel pozdĺž obrazovky.
+Stojaci valec sa meria ako kváder okolo neho (priemer × priemer × výška).
+
 ## Číslo balíka zo štítka
 
 Po zmeraní ťukni na **📷** vedľa poľa *Číslo balíka*. AR meranie sa na chvíľu vypne a zapne sa bežný fotoaparát s automatickým zaostrovaním (počas AR má kamera pevné zaostrenie na diaľku). K dispozícii je **🔦 blesk** a **2× priblíženie**.
