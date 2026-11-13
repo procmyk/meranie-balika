@@ -151,7 +151,8 @@ let collecting = null;      // pole meraní počas finálneho zberu
 let frozen = null;          // finálny výsledok
 let manual = false;         // ručný režim
 let stable = false;         // rozmery sú ustálené (indikácia na tlačidle)
-let rejects = 0, lastSeen = -999, boxDist = null;
+let rejects = 0, lastSeen = -999, boxDist = null, viewElev = 90;
+const MIN_ELEV = 30;   // pod týmto uhlom kamera nevidí poriadne vrch balíka -> hĺbka balíka by bola zlá
 let procMs = 0, procEvery = 1;   // priemerný čas výpočtu (ms), spracúva sa každá N-tá snímka
 let disp = null;                 // vyhladená poloha rámika na kreslenie {x, z, a}
 let floorCand = [];         // kandidáti výšky podlahy (auto-nastavenie)
@@ -350,6 +351,7 @@ function updateUI() {
   if (collecting) { hint.textContent = 'Meriam… drž telefón v kľude.'; act.disabled = true; act.textContent = 'Meriam…'; return; }
   let h;
   if (!latest) h = 'Namier krížik na balík zo vzdialenosti ~0,5–1 m, šikmo zhora (cca 45°). Celý balík a kúsok podlahy okolo musia byť v zábere.';
+  else if (viewElev < MIN_ELEV) h = '⤵ Pozeraj viac zhora – zdvihni telefón a nakloň ho dole, aby bolo vidno vrch balíka.';
   else if (latest.cut) h = '↔ Balík nie je celý v zábere – odstúp, alebo otoč telefón tak, aby balík išiel pozdĺž obrazovky.';
   else if (boxDist !== null && boxDist < DIST_MIN) h = '⬆ Si príliš blízko – odstúp, celý balík musí byť v zábere.';
   else if (boxDist !== null && boxDist > distMax()) h = '⬇ Si príliš ďaleko – podíď bližšie (0,5–1 m).';
@@ -651,12 +653,14 @@ function frameBody(frame) {
         history.push(acc); if (history.length > HISTORY) history.shift();
         const cx = (acc.corners[0][0] + acc.corners[2][0]) / 2, cz = (acc.corners[0][1] + acc.corners[2][1]) / 2;
         boxDist = Math.hypot(viewMat[12] - cx, viewMat[13] - (floorY + acc.height / 2), viewMat[14] - cz);
+        // ako veľmi zhora sa pozeráme na vrch balíka (0° = vodorovne, 90° = kolmo zhora)
+        viewElev = Math.atan2(viewMat[13] - (floorY + acc.height), Math.hypot(viewMat[12] - cx, viewMat[14] - cz)) * 180 / Math.PI;
         if (collecting) {
           collecting.push(acc);
           if (collecting.length >= FINAL_SAMPLES) { const r = M.aggregate(collecting); collecting = null; showResult(r); }
         }
       } else if (frameNo - lastSeen > 15) { latest = null; boxDist = null; }
-      const st = !!latest && !latest.cut && isStable();
+      const st = !!latest && !latest.cut && viewElev >= MIN_ELEV && isStable();
       if (had !== !!latest || prevHint !== hintKey() || st !== stable) { stable = st; updateUI(); }
     }
   }
@@ -712,7 +716,7 @@ function diag(nHits) {
 }
 
 function hintKey() {
-  return !latest ? 0 : latest.cut ? 4 : boxDist === null ? 1 : boxDist < DIST_MIN ? 2 : boxDist > distMax() ? 3 : 1;
+  return !latest ? 0 : viewElev < MIN_ELEV ? 5 : latest.cut ? 4 : boxDist === null ? 1 : boxDist < DIST_MIN ? 2 : boxDist > distMax() ? 3 : 1;
 }
 
 function isStable() {

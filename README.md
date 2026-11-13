@@ -11,6 +11,12 @@ Telefón potrebuje aplikáciu *Google Play Services for AR*.
 
 **Ručný režim:** zamieriš krížik postupne na 3 rohy balíka dole pri zemi a na vrch balíka, pri každom stlačíš **Bod**.
 
+## Tipy pre presné meranie
+
+- Pozeraj na balík **šikmo zhora (asi 45°)**, aby bolo vidno jeho vrch. Pri pohľade spredu aplikácia vyzve „Pozeraj viac zhora“ a nedovolí zmerať.
+- **Odsuň balík od steny a od iných predmetov** (aspoň 30–50 cm). Steny aplikácia vylúči, ale telefón hĺbku na hranách rozmazáva a balík tesne pri stene môže vyjsť dlhší.
+- Telefóny bez hĺbkového senzora (ToF/LiDAR) odhadujú hĺbku z pohybu a sú menej presné. Rátaj s chybou niekoľko cm.
+
 ## Valce a nepravidelné balíky
 
 Aplikácia rozpozná **ležiaci valec** (napr. stočený matrac) podľa zaobleného profilu. Šírku dopočíta ako priemer (= výška), lebo zadnú stranu valca kamera nevidí. Vo výsledku sa zobrazí štítok **⬭ valec** a v exporte stĺpec *Tvar*.

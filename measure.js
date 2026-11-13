@@ -129,8 +129,44 @@
    * floorY: vyska podlahy (svet, os Y hore)
    * Vrati null alebo { length, width, height, corners:[[x,z]x4], floorY, topY, count }
    */
+  // RANSAC: zvislé roviny (normála vodorovná) medzi vyvýšenými bodmi; ak je to stena, body vyradíme.
+  function removeWalls(pts, elevated, cols, rows, floorY, opts) {
+    const idx = [];
+    for (let i = 0; i < elevated.length; i++) if (elevated[i]) idx.push(i);
+    for (let wall = 0; wall < 2 && idx.length > 80; wall++) {
+      let best = null, bestCnt = 0;
+      let seedR = 12345 + wall;
+      const rnd = () => (seedR = (seedR * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+      for (let it = 0; it < 120; it++) {
+        const a = idx[(rnd() * idx.length) | 0], b = idx[(rnd() * idx.length) | 0];
+        const dx = pts[b*3] - pts[a*3], dz = pts[b*3+2] - pts[a*3+2], l = Math.hypot(dx, dz);
+        if (l < 0.2) continue;
+        const nx = -dz / l, nz = dx / l, d0 = nx * pts[a*3] + nz * pts[a*3+2];
+        let cnt = 0;
+        for (let k = 0; k < idx.length; k += 3) { const i = idx[k]; if (Math.abs(nx * pts[i*3] + nz * pts[i*3+2] - d0) < opts.wallTol) cnt++; }
+        if (cnt > bestCnt) { bestCnt = cnt; best = [nx, nz, d0]; }
+      }
+      if (!best) return;
+      const [nx, nz, d0] = best;
+      const inl = idx.filter(i => Math.abs(nx * pts[i*3] + nz * pts[i*3+2] - d0) < opts.wallTol);
+      if (inl.length < 60) return;
+      let maxH = 0, touchTop = 0, minT = Infinity, maxT = -Infinity;
+      for (const i of inl) {
+        maxH = Math.max(maxH, pts[i*3+1] - floorY);
+        if (i < cols * 2) touchTop++;                       // horné 2 riadky obrazu
+        const t = -nz * pts[i*3] + nx * pts[i*3+2];
+        if (t < minT) minT = t; if (t > maxT) maxT = t;
+      }
+      const isWall = (maxH > opts.wallMinH || touchTop >= 3) && maxT - minT > 0.5;
+      if (!isWall) return;
+      for (const i of inl) elevated[i] = 0;
+      const rest = idx.filter(i => elevated[i]);
+      idx.length = 0; idx.push(...rest);
+    }
+  }
+
   function detectBox(grid, floorY, opts) {
-    opts = Object.assign({ minH: 0.02, maxH: 2.0, link: 0.05, minPts: 40, topBand: 0.03 }, opts || {});
+    opts = Object.assign({ minH: 0.02, maxH: 2.0, link: 0.05, minPts: 40, topBand: 0.03, wallTol: 0.03, wallMinH: 0.85 }, opts || {});
     const { cols, rows, pts } = grid;
     const n = cols * rows;
     const elevated = new Uint8Array(n);
@@ -141,6 +177,10 @@
         if (h > opts.minH && h < opts.maxH) elevated[i] = 1;
       }
     }
+    // Steny: veľká zvislá plocha, ktorá siaha vyššie ako bežný balík alebo za horný okraj obrazu,
+    // nie je balík. Bez toho sa stena za balíkom „prilepí“ (telefón vyhladzuje hĺbku na hranách).
+    removeWalls(pts, elevated, cols, rows, floorY, opts);
+
     // Začiatok (seed): vyvýšené body podľa vzdialenosti od stredu obrazu. Skúšame postupne,
     // kým z niektorého nevyrastie dosť veľký objekt (osamelý šumový bod alebo podlaha v otvore
     // pneumatiky by inak meranie zablokovali).
