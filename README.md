@@ -34,3 +34,7 @@ Rozmery sa zoradia od najväčšieho a balík dostane prvú kategóriu, do ktore
 | NADROZMER | väčšie alebo dlhšie ako 120 cm |
 
 Export obsahuje na konci súhrn podľa kategórií (počet, objem, podiel). Hranice sa menia v `measure.js` (`CATEGORIES`).
+
+## Meranie na páse (hĺbková kamera)
+
+V priečinku [`kamera-pas/`](kamera-pas/) je program pre počítač s hĺbkovou kamerou nad pásom. Meria balíky za jazdy a zapisuje ich do CSV. Návod je v jeho README.
