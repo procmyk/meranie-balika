@@ -21,6 +21,9 @@
   #live { position: absolute; left: 50%; transform: translateX(-50%); bottom: 150px; padding: 8px 14px; border-radius: 10px; background: rgba(0,0,0,.6); font: 700 22px/1.2 ui-monospace, monospace; display: none; white-space: nowrap; }
   #bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; background: linear-gradient(transparent, rgba(0,0,0,.7)); }
   #result { position: absolute; left: 16px; right: 16px; top: 30%; padding: 18px; border-radius: 16px; background: rgba(20,20,20,.95); display: none; text-align: center; }
+  .cat { display: inline-block; padding: 4px 16px; border-radius: 10px; color: #111; font: 800 26px/1.2 system-ui; }
+  .cat.small { font-size: 12px; padding: 1px 6px; border-radius: 6px; }
+  #catsum { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; font-size: 13px; }
   #result .dims { font: 700 30px/1.2 ui-monospace, monospace; margin: 8px 0; }
   #result .sub { color: #bbb; font-size: 14px; }
   #result .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
@@ -45,6 +48,7 @@
   <div id="err"></div>
   <div id="log">
     <b id="logsum"></b>
+    <div id="catsum"></div>
     <div id="logtable"></div>
     <div class="btns">
       <button id="exp">⬇ Export (Excel)</button>
@@ -68,6 +72,7 @@
   </div>
   <div id="result">
     <div class="sub">Rozmery balíka (D × Š × V)</div>
+    <div id="rcat" class="cat"></div>
     <div class="dims" id="rdims"></div>
     <div class="sub" id="rsub"></div>
     <input id="note" placeholder="Číslo balíka / poznámka (nepovinné)" autocomplete="off">
@@ -232,8 +237,10 @@ function showResult(r) {
   const cm = v => Math.round(v * 100);
   const L = cm(r.length), W = cm(r.width), H = cm(r.height);
   $('rdims').textContent = `${L} × ${W} × ${H} cm`;
+  const cat = M.categorize(L, W, H);
+  $('rcat').textContent = cat.id; $('rcat').style.background = cat.color;
   const vol = (L * W * H) / 1000;
-  $('rsub').textContent = `Objem ${vol.toFixed(1)} l · objemová hmotnosť ${(L * W * H / 5000).toFixed(1)} kg (÷5000)` +
+  $('rsub').textContent = `Objem ${vol.toFixed(1).replace('.', ',')} l · objemová hmotnosť ${(L * W * H / 5000).toFixed(1).replace('.', ',')} kg (÷5000)` +
     (r.samples > 1 ? ` · ${r.samples} snímok` : '');
   $('result').style.display = 'block';
   updateUI();
@@ -283,6 +290,7 @@ function saveRecord() {
     time: frozen.time.toISOString(),
     L, W, H,
     liters: +(L * W * H / 1000).toFixed(1),
+    cat: M.categorize(L, W, H).id,
     volKg: +(L * W * H / 5000).toFixed(1),
     note: $('note').value.trim(),
     mode: frozen.mode,
@@ -295,6 +303,7 @@ function fmtTime(iso) {
   const d = new Date(iso);
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
+function shortTime(iso) { const d = new Date(iso); return `${d.getDate()}.${d.getMonth() + 1}. ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function renderLog() {
@@ -302,21 +311,35 @@ function renderLog() {
   if (!records.length) return;
   const totL = records.reduce((a, r) => a + r.liters, 0);
   $('logsum').textContent = `Uložené merania: ${records.length} · spolu ${totL.toFixed(1).replace(".", ",")} l`;
-  $('logtable').innerHTML = '<table><tr><th>#</th><th>Čas</th><th>D×Š×V cm</th><th>l</th><th>Pozn.</th></tr>' +
-    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td>${fmtTime(r.time)}</td><td>${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.note)}</td></tr>`).join('') +
+  $('catsum').innerHTML = catStats().filter(c => c.count).map(c =>
+    `<span><span class="cat small" style="background:${c.color}">${c.id}</span> ${c.count} ks · ${c.liters.toFixed(1).replace('.', ',')} l</span>`).join('');
+  $('logtable').innerHTML = '<table><tr><th>#</th><th>Kat.</th><th>Čas</th><th>D×Š×V cm</th><th>l</th><th>Pozn.</th></tr>' +
+    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td><span class="cat small" style="background:${catOf(r).color}">${catOf(r).id}</span></td><td>${shortTime(r.time)}</td><td>${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.note)}</td></tr>`).join('') +
     '</table>';
+}
+
+function catOf(r) { return M.categorize(r.L, r.W, r.H); }
+function catStats() {
+  return M.CATEGORIES.concat([M.OVERSIZE]).map(c => {
+    const rs = records.filter(r => catOf(r).id === c.id);
+    return { id: c.id, color: c.color, max: c.max, count: rs.length, liters: rs.reduce((a, r) => a + r.liters, 0) };
+  });
 }
 
 // CSV pre slovenský Excel: oddeľovač ";", desatinná čiarka, UTF-8 s BOM
 function buildCSV() {
   const q = v => { const s = String(v); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const num = v => String(v).replace('.', ',');
-  const rows = [['Poradie', 'Dátum a čas', 'Dĺžka (cm)', 'Šírka (cm)', 'Výška (cm)', 'Objem (l)', 'Objemová hmotnosť (kg, ÷5000)', 'Číslo balíka / poznámka', 'Režim']];
-  for (const r of records) rows.push([r.n, fmtTime(r.time), r.L, r.W, r.H, num(r.liters), num(r.volKg), r.note, r.mode]);
+  const rows = [['Poradie', 'Kategória', 'Dátum a čas', 'Dĺžka (cm)', 'Šírka (cm)', 'Výška (cm)', 'Objem (l)', 'Objemová hmotnosť (kg, ÷5000)', 'Číslo balíka / poznámka', 'Režim']];
+  for (const r of records) rows.push([r.n, catOf(r).id, fmtTime(r.time), r.L, r.W, r.H, num(r.liters), num(r.volKg), r.note, r.mode]);
   const tot = records.reduce((a, r) => a + r.liters, 0);
   rows.push([]);
   rows.push(['Počet balíkov', records.length]);
   rows.push(['Objem spolu (l)', num(tot.toFixed(1))]);
+  rows.push([]);
+  rows.push(['Kategória', 'Max. rozmery (cm)', 'Počet balíkov', 'Objem spolu (l)', 'Podiel z počtu']);
+  for (const c of catStats()) rows.push([c.id, c.max ? c.max.join(' × ') : 'väčšie / dlhšie ako 120', c.count, num(c.liters.toFixed(1)),
+    records.length ? num((100 * c.count / records.length).toFixed(1)) + ' %' : '0 %']);
   return '\ufeff' + rows.map(r => r.map(q).join(';')).join('\r\n');
 }
 function csvName() { const d = new Date(); return `merania_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.csv`; }

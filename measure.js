@@ -197,6 +197,22 @@
     };
   }
 
-  const api = { mulVec, invert, viewRay, unproject, percentile, median, convexHull, minAreaAngle, robustRect, detectBox, aggregate };
+  // Kategórie balíkov podľa rozmerov (cm). Balík patrí do prvej, do ktorej sa zmestí v ľubovoľnom otočení.
+  const CATEGORIES = [
+    { id: 'XS', max: [25, 20, 10], color: '#4fc3f7' },
+    { id: 'S', max: [40, 30, 15], color: '#3ddc84' },
+    { id: 'M', max: [60, 40, 30], color: '#ffcc00' },
+    { id: 'L', max: [80, 60, 40], color: '#ff9800' },
+    { id: 'XL', max: [120, 80, 60], color: '#f44336' },
+  ];
+  const OVERSIZE = { id: 'NADROZMER', max: null, color: '#b388ff' };
+
+  function categorize(L, W, H) {
+    const d = [L, W, H].sort((a, b) => b - a);
+    for (const c of CATEGORIES) if (d[0] <= c.max[0] && d[1] <= c.max[1] && d[2] <= c.max[2]) return c;
+    return OVERSIZE;
+  }
+
+  const api = { CATEGORIES, OVERSIZE, categorize, mulVec, invert, viewRay, unproject, percentile, median, convexHull, minAreaAngle, robustRect, detectBox, aggregate };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Measure = api;
 })(this);

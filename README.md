@@ -16,6 +16,21 @@ Ak zariadenie nepodporuje hĺbkovú mapu, použi **Ručný režim** (3 rohy pods
 Po meraní môžeš doplniť číslo balíka alebo poznámku a dať **Uložiť a merať ďalší**. Merania sa ukladajú v telefóne.
 Po stlačení **Koniec** je na úvodnej obrazovke zoznam meraní a tlačidlá:
 
-- **Export (Excel)** stiahne súbor CSV (poradie, dátum a čas, D × Š × V v cm, objem v litroch, objemová hmotnosť, poznámka, režim, počet balíkov a objem spolu).
+- **Export (Excel)** stiahne súbor CSV (poradie, kategória, dátum a čas, D × Š × V v cm, objem v litroch, objemová hmotnosť, poznámka, režim, počet balíkov a objem spolu).
 - **Zdieľať** pošle súbor napríklad e-mailom alebo cez WhatsApp.
 - **Vymazať** zmaže všetky uložené merania.
+
+## Kategórie balíkov
+
+Rozmery sa zoradia od najväčšieho a balík dostane prvú kategóriu, do ktorej sa zmestí (na otočení nezáleží):
+
+| Kategória | Max. rozmery (cm) |
+|---|---|
+| XS | 25 × 20 × 10 |
+| S | 40 × 30 × 15 |
+| M | 60 × 40 × 30 |
+| L | 80 × 60 × 40 |
+| XL | 120 × 80 × 60 |
+| NADROZMER | väčšie alebo dlhšie ako 120 cm |
+
+Export obsahuje na konci súhrn podľa kategórií (počet, objem, podiel). Hranice sa menia v `measure.js` (`CATEGORIES`).
