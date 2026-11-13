@@ -31,6 +31,16 @@
   #diag { position: absolute; left: 12px; right: 12px; bottom: 84px; text-align: center; font: 12px ui-monospace, monospace; color: #ccc; text-shadow: 0 0 3px #000; }
   #act.ok { background: #3ddc84; }
   #count { position: absolute; top: 70px; left: 12px; font-size: 13px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.6); }
+  #result .coderow { display: flex; gap: 8px; margin-top: 12px; }
+  #result .coderow input { margin-top: 0; flex: 1; }
+  #result .coderow button { padding: 0 16px; font-size: 22px; }
+  #dupwarn { display: none; margin-top: 8px; color: #ff9800; font-size: 14px; }
+  #scan { position: absolute; inset: 0; display: none; }
+  #scanframe { position: absolute; left: 8%; right: 8%; top: 32%; height: 22%; border: 3px solid #ffcc00; border-radius: 14px; box-shadow: 0 0 0 9999px rgba(0,0,0,.45); }
+  #scanframe::after { content: ''; position: absolute; left: 6%; right: 6%; top: 50%; height: 2px; background: #ff5252; animation: scanline 1.6s ease-in-out infinite; }
+  @keyframes scanline { 0%, 100% { transform: translateY(-40px); } 50% { transform: translateY(40px); } }
+  #scanhint { position: absolute; left: 12px; right: 12px; top: 18%; text-align: center; padding: 10px; border-radius: 12px; background: rgba(0,0,0,.6); }
+  #scanbar { position: absolute; left: 0; right: 0; bottom: 24px; display: flex; justify-content: center; }
   #result input { width: 100%; margin-top: 12px; padding: 12px; border-radius: 10px; border: 1px solid #555; background: #222; color: #fff; font: inherit; }
   #log { width: 100%; max-width: 520px; display: none; flex-direction: column; gap: 10px; }
   #log .btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
@@ -72,12 +82,22 @@
     <button id="reset" class="sec">Znova</button>
     <button id="exit" class="sec">Koniec</button>
   </div>
+  <div id="scan">
+    <div id="scanhint">Namier rámik na čiarový alebo QR kód na štítku (10–30 cm)</div>
+    <div id="scanframe"></div>
+    <div id="scanbar"><button id="scancancel" class="sec">Zrušiť</button></div>
+  </div>
   <div id="result">
     <div class="sub">Rozmery balíka (D × Š × V)</div>
     <div id="rcat" class="cat"></div>
     <div class="dims" id="rdims"></div>
     <div class="sub" id="rsub"></div>
-    <input id="note" placeholder="Číslo balíka / poznámka (nepovinné)" autocomplete="off">
+    <div class="coderow">
+      <input id="code" placeholder="Číslo balíka" autocomplete="off" inputmode="text">
+      <button id="scanbtn" class="sec" title="Skenovať kód">📷</button>
+    </div>
+    <div id="dupwarn"></div>
+    <input id="note" placeholder="Poznámka (nepovinné)" autocomplete="off">
     <div class="row">
       <button id="discard" class="sec">Zahodiť</button>
       <button id="save">Uložiť a merať ďalší</button>
@@ -135,7 +155,17 @@ function fail(msg) { $('err').textContent = msg; }
 $('go').onclick = start;
 $('exit').onclick = () => session && session.end();
 $('reset').onclick = resetAll;
-$('save').onclick = () => { saveRecord(); resetMeasure(); };
+$('save').onclick = () => {
+  const dup = findDup($('code').value);
+  if (dup && !$('save').dataset.sure) {
+    $('save').dataset.sure = 1; $('save').textContent = 'Uložiť aj tak';
+    showDup(dup, true); return;
+  }
+  saveRecord(); resetMeasure();
+};
+$('code').oninput = () => { showDup(findDup($('code').value)); };
+$('scanbtn').onclick = startScan;
+$('scancancel').onclick = () => stopScan(null);
 $('discard').onclick = resetMeasure;
 $('exp').onclick = exportCSV;
 $('share').onclick = shareCSV;
@@ -160,12 +190,12 @@ async function start() {
   let lastErr;
   for (const ds of depthVariants) {
     try {
-      session = await navigator.xr.requestSession('immersive-ar', Object.assign({}, base, { optionalFeatures: ['depth-sensing'], depthSensing: ds }));
+      session = await navigator.xr.requestSession('immersive-ar', Object.assign({}, base, { optionalFeatures: ['depth-sensing', 'camera-access'], depthSensing: ds }));
       break;
     } catch (e) { lastErr = e; }
   }
   if (!session) {
-    try { session = await navigator.xr.requestSession('immersive-ar', base); }
+    try { session = await navigator.xr.requestSession('immersive-ar', Object.assign({}, base, { optionalFeatures: ['camera-access'] })); }
     catch (e) { return fail('Nepodarilo sa spustiť AR: ' + (e.message || lastErr)); }
   }
   depthOK = !!(session.enabledFeatures ? session.enabledFeatures.includes('depth-sensing') : session.depthUsage);
@@ -174,6 +204,8 @@ async function start() {
   const canvas = document.createElement('canvas');
   gl = canvas.getContext('webgl', { xrCompatible: true, alpha: true });
   await session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  camOK = !!(session.enabledFeatures && session.enabledFeatures.includes('camera-access')) && typeof XRWebGLBinding !== 'undefined';
+  if (camOK) { try { glBinding = new XRWebGLBinding(session, gl); } catch (e) { camOK = false; } }
   refSpace = await session.requestReferenceSpace('local');
   viewerSpace = await session.requestReferenceSpace('viewer');
   hitSource = await session.requestHitTestSource({ space: viewerSpace });
@@ -202,7 +234,9 @@ function resetMeasure() {
   history = []; latest = null; collecting = null; frozen = null; manualPts = []; rejects = 0; boxDist = null; stable = false;
   $('act').classList.remove('ok');
   $('result').style.display = 'none';
-  $('note').value = '';
+  $('note').value = ''; $('code').value = ''; showDup(null);
+  delete $('save').dataset.sure; $('save').textContent = 'Uložiť a merať ďalší';
+  if (scanning) stopScan(null);
   updateUI();
 }
 
@@ -284,6 +318,115 @@ function updateUI() {
   act.textContent = 'Zmerať'; act.disabled = !latest;
 }
 
+// ---------- skenovanie čiarových / QR kódov ----------
+// Obraz kamery počas AR: WebXR Raw Camera Access (camera-access) -> WebGL -> ImageData -> BarcodeDetector.
+let camOK = false, glBinding = null, scanning = false, scanBusy = false, detector = null, camFB = null;
+const BARCODE_FORMATS = ['code_128', 'code_39', 'code_93', 'codabar', 'ean_13', 'ean_8', 'itf', 'upc_a', 'upc_e', 'data_matrix', 'qr_code', 'pdf417', 'aztec'];
+
+async function getDetector() {
+  if (detector) return detector;
+  if (!('BarcodeDetector' in window)) return null;
+  let formats = BARCODE_FORMATS;
+  try { const sup = await BarcodeDetector.getSupportedFormats(); formats = BARCODE_FORMATS.filter(f => sup.includes(f)); } catch (e) {}
+  if (!formats.length) return null;
+  detector = new BarcodeDetector({ formats });
+  return detector;
+}
+
+async function startScan() {
+  if (!camOK) { flashResult('Toto zariadenie neumožňuje čítať kód počas merania. Zadaj číslo ručne.'); return; }
+  if (!(await getDetector())) { flashResult('Prehliadač nepodporuje čítanie kódov. Zadaj číslo ručne.'); return; }
+  scanning = true; scanBusy = false;
+  $('result').style.display = 'none'; $('scan').style.display = 'block';
+  for (const id of ['bar', 'hint', 'live', 'mode', 'count', 'diag']) $(id).style.visibility = 'hidden';
+}
+
+function stopScan(value) {
+  scanning = false;
+  $('scan').style.display = 'none';
+  for (const id of ['bar', 'hint', 'live', 'mode', 'count', 'diag']) $(id).style.visibility = '';
+  if (frozen) $('result').style.display = 'block';
+  if (value) {
+    $('code').value = value;
+    if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+    showDup(findDup(value));
+  }
+}
+
+function flashResult(msg) {
+  const w = $('dupwarn'); w.textContent = msg; w.style.display = 'block';
+  setTimeout(() => { if (w.textContent === msg) showDup(findDup($('code').value)); }, 3000);
+}
+
+function findDup(code) {
+  code = (code || '').trim();
+  return code ? records.find(r => (r.code || '').trim() === code) : null;
+}
+function showDup(r, strong) {
+  const w = $('dupwarn');
+  if (!r) { w.style.display = 'none'; w.textContent = ''; return; }
+  w.textContent = `⚠ Tento balík už je uložený (#${r.n}, ${shortTime(r.time)}, ${r.L}×${r.W}×${r.H} cm).` + (strong ? ' Stlač znova pre uloženie.' : '');
+  w.style.display = 'block';
+}
+
+// Kamerový obraz (nepriehľadná textúra) -> vlastný framebuffer cez shader -> pixely.
+let camProg = null, camBuf = null;
+function grabCamera(view) {
+  const cam = view.camera;
+  if (!cam) return null;
+  const tex = glBinding.getCameraImage(cam);
+  if (!tex) return null;
+  const w = cam.width, h = cam.height;
+  if (!camProg) {
+    const vs = 'attribute vec2 p; varying vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }';
+    const fs = 'precision mediump float; varying vec2 uv; uniform sampler2D t; void main(){ gl_FragColor = texture2D(t, uv); }';
+    const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
+    camProg = gl.createProgram();
+    gl.attachShader(camProg, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(camProg, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(camProg);
+    camBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, camBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  }
+  if (!camFB || camFB.w !== w || camFB.h !== h) {
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+    camFB = { fb, t, w, h, px: new Uint8Array(w * h * 4) };
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, camFB.fb);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(camProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.uniform1i(gl.getUniformLocation(camProg, 't'), 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, camBuf);
+  const loc = gl.getAttribLocation(camProg, 'p');
+  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, camFB.px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
+  // otočenie zvisle (WebGL má počiatok dole) -> ImageData
+  const img = new ImageData(w, h), row = w * 4;
+  for (let y = 0; y < h; y++) img.data.set(camFB.px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+  return img;
+}
+
+function scanFrame(view) {
+  if (!scanning || scanBusy || frameNo % 4) return;
+  let img;
+  try { img = grabCamera(view); } catch (e) { return; }
+  if (!img) return;
+  scanBusy = true;
+  detector.detect(img).then(codes => {
+    scanBusy = false;
+    if (!scanning || !codes.length) return;
+    // najväčší kód (najbližšie k telefónu)
+    codes.sort((a, b) => (b.boundingBox.width * b.boundingBox.height) - (a.boundingBox.width * a.boundingBox.height));
+    stopScan(codes[0].rawValue.trim());
+  }).catch(() => { scanBusy = false; });
+}
+
 // ---------- uložené merania ----------
 const STORE = 'meranie-balika-zaznamy';
 let records = [];
@@ -301,6 +444,7 @@ function saveRecord() {
     liters: +(L * W * H / 1000).toFixed(1),
     cat: M.categorize(L, W, H).id,
     volKg: +(L * W * H / 5000).toFixed(1),
+    code: $('code').value.trim(),
     note: $('note').value.trim(),
     mode: frozen.mode,
   });
@@ -322,8 +466,8 @@ function renderLog() {
   $('logsum').textContent = `Uložené merania: ${records.length} · spolu ${totL.toFixed(1).replace(".", ",")} l`;
   $('catsum').innerHTML = catStats().filter(c => c.count).map(c =>
     `<span><span class="cat small" style="background:${c.color}">${c.id}</span> ${c.count} ks · ${c.liters.toFixed(1).replace('.', ',')} l</span>`).join('');
-  $('logtable').innerHTML = '<table><tr><th>#</th><th>Kat.</th><th>Čas</th><th>D×Š×V cm</th><th>l</th><th>Pozn.</th></tr>' +
-    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td><span class="cat small" style="background:${catOf(r).color}">${catOf(r).id}</span></td><td>${shortTime(r.time)}</td><td>${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.note)}</td></tr>`).join('') +
+  $('logtable').innerHTML = '<table><tr><th>#</th><th>Kat.</th><th>Čas</th><th>D×Š×V cm</th><th>l</th><th>Číslo balíka</th></tr>' +
+    records.slice().reverse().map(r => `<tr><td>${r.n}</td><td><span class="cat small" style="background:${catOf(r).color}">${catOf(r).id}</span></td><td>${shortTime(r.time)}</td><td>${r.L}×${r.W}×${r.H}</td><td>${String(r.liters).replace('.', ',')}</td><td>${esc(r.code || '')}${r.note ? ` <span style="color:#999">${esc(r.note)}</span>` : ''}</td></tr>`).join('') +
     '</table>';
 }
 
@@ -339,8 +483,8 @@ function catStats() {
 function buildCSV() {
   const q = v => { const s = String(v); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const num = v => String(v).replace('.', ',');
-  const rows = [['Poradie', 'Kategória', 'Dátum a čas', 'Dĺžka (cm)', 'Šírka (cm)', 'Výška (cm)', 'Objem (l)', 'Objemová hmotnosť (kg, ÷5000)', 'Číslo balíka / poznámka', 'Režim']];
-  for (const r of records) rows.push([r.n, catOf(r).id, fmtTime(r.time), r.L, r.W, r.H, num(r.liters), num(r.volKg), r.note, r.mode]);
+  const rows = [['Poradie', 'Číslo balíka', 'Kategória', 'Dátum a čas', 'Dĺžka (cm)', 'Šírka (cm)', 'Výška (cm)', 'Objem (l)', 'Objemová hmotnosť (kg, ÷5000)', 'Poznámka', 'Režim']];
+  for (const r of records) rows.push([r.n, r.code || '', catOf(r).id, fmtTime(r.time), r.L, r.W, r.H, num(r.liters), num(r.volKg), r.note, r.mode]);
   const tot = records.reduce((a, r) => a + r.liters, 0);
   rows.push([]);
   rows.push(['Počet balíkov', records.length]);
@@ -390,6 +534,7 @@ function frameBody(frame) {
   const pose = frame.getViewerPose(refSpace);
   if (!pose) { if (frameNo % 10 === 0) $('diag').textContent = 'Sledovanie polohy… pomaly hýb telefónom'; return; }
   const view = pose.views[0];
+  if (scanning) scanFrame(view);
   const proj = view.projectionMatrix, viewMat = view.transform.matrix;
   lastView = { proj, viewInv: view.transform.inverse.matrix, camY: viewMat[13] };
 

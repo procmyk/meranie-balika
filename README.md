@@ -11,12 +11,18 @@ Telefón potrebuje aplikáciu *Google Play Services for AR*.
 
 **Ručný režim:** zamieriš krížik postupne na 3 rohy balíka dole pri zemi a na vrch balíka, pri každom stlačíš **Bod**.
 
+## Číslo balíka zo štítka
+
+Po zmeraní ťukni na **📷** vedľa poľa *Číslo balíka* a namier telefón na kód na štítku (10–30 cm). Prečíta čiarové kódy (Code 128, EAN, ITF…) aj 2D kódy (QR, DataMatrix, PDF417). Číslo sa vyplní samo a telefón zavibruje.
+Ak je balík s rovnakým číslom už uložený, aplikácia upozorní a uloží ho až po druhom stlačení.
+Funguje to na telefónoch s Chrome, ktoré počas AR sprístupnia obraz kamery. Inak sa číslo dá napísať ručne.
+
 ## Export meraní
 
 Po meraní môžeš doplniť číslo balíka alebo poznámku a dať **Uložiť a merať ďalší**. Merania sa ukladajú v telefóne.
 Po stlačení **Koniec** je na úvodnej obrazovke zoznam meraní a tlačidlá:
 
-- **Export (Excel)** stiahne súbor CSV (poradie, kategória, dátum a čas, D × Š × V v cm, objem v litroch, objemová hmotnosť, poznámka, režim, počet balíkov a objem spolu).
+- **Export (Excel)** stiahne súbor CSV (poradie, číslo balíka, kategória, dátum a čas, D × Š × V v cm, objem v litroch, objemová hmotnosť, poznámka, režim, počet balíkov a objem spolu).
 - **Zdieľať** pošle súbor napríklad e-mailom alebo cez WhatsApp.
 - **Vymazať** zmaže všetky uložené merania.
 
