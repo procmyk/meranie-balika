@@ -28,6 +28,8 @@
   #result .sub { color: #bbb; font-size: 14px; }
   #result .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
   #mode { position: absolute; top: 70px; right: 12px; font-size: 13px; padding: 8px 12px; }
+  #boxbtn { position: absolute; top: 116px; right: 12px; font-size: 13px; padding: 8px 12px; }
+  #boxbtn.on { background: #3ddc84; color: #111; }
   #diag { position: absolute; left: 12px; right: 12px; bottom: 84px; text-align: center; font: 12px ui-monospace, monospace; color: #ccc; text-shadow: 0 0 3px #000; }
   #act.ok { background: #3ddc84; }
   #count { position: absolute; top: 70px; left: 12px; font-size: 13px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.6); }
@@ -95,6 +97,7 @@
   <canvas id="c2d"></canvas>
   <div id="hint">Inicializujem…</div>
   <button id="mode" class="sec">Ručný režim</button>
+  <button id="boxbtn" class="sec">▢ Rámik</button>
   <div id="count"></div>
   <div id="live"></div>
   <div id="diag"></div>
@@ -198,6 +201,12 @@ $('clear').onclick = () => {
   else { $('clear').dataset.sure = 1; $('clear').textContent = 'Naozaj vymazať?'; setTimeout(() => { delete $('clear').dataset.sure; $('clear').textContent = 'Vymazať'; }, 3000); }
 };
 $('mode').onclick = () => { manual = !manual; resetMeasure(); updateUI(); };
+// 3D rámik je len na kontrolu – predvolene vypnutý (stačí značka na balíku); voľba sa pamätá
+let showBox = false;
+try { showBox = localStorage.getItem('meranie-ramik') === '1'; } catch (e) {}
+function syncBoxBtn() { $('boxbtn').classList.toggle('on', showBox); $('boxbtn').textContent = showBox ? '▣ Rámik zap' : '▢ Rámik'; }
+syncBoxBtn();
+$('boxbtn').onclick = () => { showBox = !showBox; try { localStorage.setItem('meranie-ramik', showBox ? '1' : '0'); } catch (e) {} syncBoxBtn(); };
 $('act').onclick = onAction;
 
 // ---------- spustenie session ----------
@@ -323,6 +332,7 @@ function updateUI() {
   const act = $('act'), hint = $('hint');
   $('mode').textContent = manual ? 'Automatický režim' : 'Ručný režim';
   $('mode').style.display = depthOK ? '' : 'none';
+  $('boxbtn').style.display = manual ? 'none' : '';
   $('live').style.display = 'none';
   $('count').textContent = `Uložené: ${records.length}`;
   if (frozen) { hint.textContent = 'Hotovo. Ulož meranie alebo ho zahoď.'; act.style.display = 'none'; return; }
@@ -343,7 +353,7 @@ function updateUI() {
   else if (latest.cut) h = '↔ Balík nie je celý v zábere – odstúp, alebo otoč telefón tak, aby balík išiel pozdĺž obrazovky.';
   else if (boxDist !== null && boxDist < DIST_MIN) h = '⬆ Si príliš blízko – odstúp, celý balík musí byť v zábere.';
   else if (boxDist !== null && boxDist > distMax()) h = '⬇ Si príliš ďaleko – podíď bližšie (0,5–1 m).';
-  else h = stable ? 'Rozmery sú stabilné ✓ – ak rámik sedí na balíku, stlač Zmerať.' : 'Balík nájdený – drž telefón chvíľu v kľude, kým tlačidlo nezozelenie.';
+  else h = stable ? 'Rozmery sú stabilné ✓ – stlač Zmerať.' : 'Balík nájdený – drž telefón chvíľu v kľude, kým tlačidlo nezozelenie.';
   hint.textContent = h;
   act.classList.toggle('ok', !!latest && stable);
   act.textContent = 'Zmerať'; act.disabled = !latest;
@@ -788,6 +798,16 @@ function draw() {
     [pose.x + ca * i * hl - sa * j * hw, pose.z + sa * i * hl + ca * j * hw]);
   const b = cor.map(([x, z]) => [x, floorY, z]);
   const t = cor.map(([x, z]) => [x, floorY + agg.height, z]);
+  if (!showBox) {
+    // len značka na vrchu meraného balíka: ukazuje, ktorý balík sa meria, nič netreba „nastavovať“
+    const m = toScreen([pose.x, floorY + agg.height, pose.z]);
+    if (m) {
+      ctx.fillStyle = ok ? '#3ddc84' : '#ffffff';
+      ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(m[0], m[1], 11, 0, 7); ctx.fill(); ctx.stroke();
+      if (ok) { ctx.strokeStyle = '#111'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(m[0] - 5, m[1]); ctx.lineTo(m[0] - 1, m[1] + 4); ctx.lineTo(m[0] + 6, m[1] - 4); ctx.stroke(); }
+    }
+  } else {
   // polopriehľadný vrch a bočné steny -> ľahšie porovnanie so skutočným balíkom
   fillPoly(t, ok ? 'rgba(61,220,132,.28)' : 'rgba(255,255,255,.18)');
   for (let i = 0; i < 4; i++) fillPoly([b[i], b[(i + 1) % 4], t[(i + 1) % 4], t[i]], ok ? 'rgba(61,220,132,.10)' : 'rgba(255,255,255,.07)');
@@ -795,6 +815,7 @@ function draw() {
     line(b[i], b[(i + 1) % 4], color, 2);
     line(t[i], t[(i + 1) % 4], color, 4);
     line(b[i], t[i], color, 3);
+  }
   }
   const cm = v => Math.round(v * 100);
   $('live').textContent = `${({ valec: '⬭ ', koleso: '◯ ', pneumatika: '🛞 ' })[agg.shape] || ''}${cm(agg.length)} × ${cm(agg.width)} × ${cm(agg.height)} cm`;
