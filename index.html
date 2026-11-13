@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#111">
+<title>Meranie balíka</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #111; color: #fff; font: 16px/1.4 system-ui, sans-serif; }
+  #start { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 24px; text-align: center; gap: 16px; }
+  #start h1 { margin: 0; font-size: 26px; }
+  #start p { margin: 0; color: #bbb; max-width: 420px; }
+  button { font: inherit; border: 0; border-radius: 12px; padding: 14px 22px; background: #ffcc00; color: #111; font-weight: 700; }
+  button.sec { background: rgba(255,255,255,.18); color: #fff; }
+  button:disabled { opacity: .4; }
+  #err { color: #ff7a7a; max-width: 420px; }
+  #overlay { position: fixed; inset: 0; display: none; }
+  #overlay canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #hint { position: absolute; top: 12px; left: 12px; right: 12px; padding: 10px 14px; border-radius: 12px; background: rgba(0,0,0,.6); text-align: center; font-size: 15px; }
+  #live { position: absolute; left: 50%; transform: translateX(-50%); bottom: 150px; padding: 8px 14px; border-radius: 10px; background: rgba(0,0,0,.6); font: 700 22px/1.2 ui-monospace, monospace; display: none; white-space: nowrap; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; background: linear-gradient(transparent, rgba(0,0,0,.7)); }
+  #result { position: absolute; left: 16px; right: 16px; top: 30%; padding: 18px; border-radius: 16px; background: rgba(20,20,20,.95); display: none; text-align: center; }
+  #result .dims { font: 700 30px/1.2 ui-monospace, monospace; margin: 8px 0; }
+  #result .sub { color: #bbb; font-size: 14px; }
+  #result .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
+  #mode { position: absolute; top: 70px; right: 12px; font-size: 13px; padding: 8px 12px; }
+</style>
+</head>
+<body>
+<div id="start">
+  <h1>📦 Meranie balíka</h1>
+  <p>Polož balík na zem, spusti meranie a nasleduj pokyny. Aplikácia nájde krabicu automaticky pomocou hĺbkovej kamery (ARCore).</p>
+  <button id="go" disabled>Spustiť meranie</button>
+  <div id="err"></div>
+  <p style="font-size:13px">Vyžaduje Android, Chrome a <i>Google Play Services for AR</i>.</p>
+</div>
+
+<div id="overlay">
+  <canvas id="c2d"></canvas>
+  <div id="hint">Inicializujem…</div>
+  <button id="mode" class="sec">Ručný režim</button>
+  <div id="live"></div>
+  <div id="bar">
+    <button id="act">Nastaviť podlahu</button>
+    <button id="reset" class="sec">Znova</button>
+    <button id="exit" class="sec">Koniec</button>
+  </div>
+  <div id="result">
+    <div class="sub">Rozmery balíka (D × Š × V)</div>
+    <div class="dims" id="rdims"></div>
+    <div class="sub" id="rsub"></div>
+    <div class="row">
+      <button id="copy" class="sec">Kopírovať</button>
+      <button id="again">Merať ďalší</button>
+    </div>
+  </div>
+</div>
+
+<script src="measure.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const M = window.Measure;
+
+// ---------- nastavenia ----------
+const GRID_COLS = 64, GRID_ROWS = 112;   // vzorkovanie hĺbkovej mapy
+const HISTORY = 25;                        // počet snímok pre medián
+const FINAL_SAMPLES = 20;                  // snímky zbierané po stlačení "Zmerať"
+
+// ---------- stav ----------
+let session, refSpace, viewerSpace, hitSource, gl;
+let depthOK = false;
+let floorY = null;          // výška podlahy vo svete
+let lastHit = null;         // posledný horizontálny zásah
+let history = [];           // posledné detekcie
+let latest = null;          // posledná detekcia (na kreslenie)
+let collecting = null;      // pole meraní počas finálneho zberu
+let frozen = null;          // finálny výsledok
+let manual = false;         // ručný režim
+let manualPts = [];         // ručné body [x,y,z]
+let frameNo = 0;
+let lastView = null;        // {proj, viewInv}
+
+const ctx = $('c2d').getContext('2d');
+
+// ---------- podpora ----------
+(async () => {
+  if (!window.isSecureContext) return fail('Stránka musí byť otvorená cez HTTPS.');
+  if (!navigator.xr) return fail('Tento prehliadač nepodporuje WebXR. Použi Chrome na Androide.');
+  try {
+    const ok = await navigator.xr.isSessionSupported('immersive-ar');
+    if (!ok) return fail('AR nie je na tomto zariadení podporované (chýba ARCore?).');
+    $('go').disabled = false;
+  } catch (e) { fail('Chyba pri overovaní AR: ' + e.message); }
+})();
+function fail(msg) { $('err').textContent = msg; }
+
+$('go').onclick = start;
+$('exit').onclick = () => session && session.end();
+$('reset').onclick = resetAll;
+$('again').onclick = resetMeasure;
+$('mode').onclick = () => { manual = !manual; resetMeasure(); updateUI(); };
+$('copy').onclick = () => {
+  const t = $('rdims').textContent;
+  navigator.clipboard && navigator.clipboard.writeText(t).then(() => { $('copy').textContent = 'Skopírované ✓'; });
+};
+$('act').onclick = onAction;
+
+// ---------- spustenie session ----------
+async function start() {
+  $('err').textContent = '';
+  const base = { requiredFeatures: ['hit-test', 'dom-overlay'], domOverlay: { root: $('overlay') } };
+  // Chrome postupne menil názvy formátov hĺbky – skúsime viac variantov.
+  const depthVariants = [
+    { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
+    { usagePreference: ['cpu-optimized'], dataFormatPreference: ['unsigned-short', 'float32'] },
+    { usagePreference: ['cpu-optimized'], dataFormatPreference: ['float32'] },
+  ];
+  let lastErr;
+  for (const ds of depthVariants) {
+    try {
+      session = await navigator.xr.requestSession('immersive-ar', Object.assign({}, base, { optionalFeatures: ['depth-sensing'], depthSensing: ds }));
+      break;
+    } catch (e) { lastErr = e; }
+  }
+  if (!session) {
+    try { session = await navigator.xr.requestSession('immersive-ar', base); }
+    catch (e) { return fail('Nepodarilo sa spustiť AR: ' + (e.message || lastErr)); }
+  }
+  depthOK = !!(session.enabledFeatures ? session.enabledFeatures.includes('depth-sensing') : session.depthUsage);
+  if (!depthOK) manual = true;
+
+  const canvas = document.createElement('canvas');
+  gl = canvas.getContext('webgl', { xrCompatible: true, alpha: true });
+  await session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  refSpace = await session.requestReferenceSpace('local');
+  viewerSpace = await session.requestReferenceSpace('viewer');
+  hitSource = await session.requestHitTestSource({ space: viewerSpace });
+
+  $('start').style.display = 'none';
+  $('overlay').style.display = 'block';
+  resize();
+  window.addEventListener('resize', resize);
+  session.addEventListener('end', () => {
+    $('overlay').style.display = 'none';
+    $('start').style.display = 'flex';
+    session = null; resetAll();
+  });
+  resetAll();
+  session.requestAnimationFrame(onFrame);
+}
+
+function resize() {
+  const c = $('c2d'), dpr = window.devicePixelRatio || 1;
+  c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function resetAll() { floorY = null; resetMeasure(); }
+function resetMeasure() {
+  history = []; latest = null; collecting = null; frozen = null; manualPts = [];
+  $('result').style.display = 'none';
+  $('copy').textContent = 'Kopírovať';
+  updateUI();
+}
+
+// ---------- tlačidlo akcie ----------
+function onAction() {
+  if (floorY === null) {
+    if (!lastHit) return;
+    floorY = lastHit[1];
+    updateUI(); return;
+  }
+  if (manual) {
+    if (manualPts.length < 3) { if (lastHit) manualPts.push(lastHit); }
+    else if (manualPts.length === 3) {
+      // výška: bod na vrchu balíka – z hĺbky v strede obrazu, inak z hit-testu
+      const top = centerPoint || lastAnyHit;
+      if (top) { manualPts.push(top); finishManual(); }
+    }
+    updateUI(); return;
+  }
+  if (!collecting && latest) { collecting = []; updateUI(); }
+}
+
+function finishManual() {
+  const [a, b, c, t] = manualPts;
+  const dist = (p, q) => Math.hypot(p[0] - q[0], p[2] - q[2]);
+  const L = dist(a, b), W = dist(b, c), H = t[1] - floorY;
+  showResult({ length: Math.max(L, W), width: Math.min(L, W), height: H, samples: 1 });
+}
+
+function showResult(r) {
+  frozen = r;
+  const cm = v => Math.round(v * 100);
+  const L = cm(r.length), W = cm(r.width), H = cm(r.height);
+  $('rdims').textContent = `${L} × ${W} × ${H} cm`;
+  const vol = (L * W * H) / 1000;
+  $('rsub').textContent = `Objem ${vol.toFixed(1)} l · objemová hmotnosť ${(L * W * H / 5000).toFixed(1)} kg (÷5000)` +
+    (r.samples > 1 ? ` · ${r.samples} snímok` : '');
+  $('result').style.display = 'block';
+  updateUI();
+}
+
+function updateUI() {
+  const act = $('act'), hint = $('hint');
+  $('mode').textContent = manual ? 'Automatický režim' : 'Ručný režim';
+  $('mode').style.display = depthOK ? '' : 'none';
+  $('live').style.display = 'none';
+  if (frozen) { hint.textContent = 'Hotovo.'; act.style.display = 'none'; return; }
+  act.style.display = '';
+  if (floorY === null) {
+    hint.textContent = 'Namier na podlahu vedľa balíka a pomaly hýb telefónom, kým sa neobjaví zelený kruh.';
+    act.textContent = 'Nastaviť podlahu'; act.disabled = !lastHit; return;
+  }
+  if (manual) {
+    const steps = ['1. roh podstavy', '2. roh (susedný)', '3. roh (susedný k 2.)', 'vrch balíka'];
+    hint.textContent = `Ručný režim: zamier krížik na ${steps[manualPts.length]} a stlač Bod.` +
+      (depthOK ? '' : ' (Zariadenie nepodporuje hĺbkovú mapu.)');
+    act.textContent = 'Bod'; act.disabled = false; return;
+  }
+  if (collecting) { hint.textContent = 'Meriam… drž telefón v kľude.'; act.disabled = true; act.textContent = 'Meriam…'; return; }
+  hint.textContent = latest
+    ? 'Balík nájdený. Pre presnosť ho maj celý v zábere, ideálne zhora šikmo. Potom stlač Zmerať.'
+    : 'Namier stred obrazovky na balík zo vzdialenosti ~0,5–1,5 m, mierne zhora.';
+  act.textContent = 'Zmerať'; act.disabled = !latest;
+}
+
+// ---------- hlavná slučka ----------
+let centerPoint = null, lastAnyHit = null;
+const grid = { cols: GRID_COLS, rows: GRID_ROWS, pts: new Float32Array(GRID_COLS * GRID_ROWS * 3) };
+
+function onFrame(t, frame) {
+  if (!session) return;
+  session.requestAnimationFrame(onFrame);
+  frameNo++;
+  const layer = session.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+
+  const pose = frame.getViewerPose(refSpace);
+  if (!pose) return;
+  const view = pose.views[0];
+  const proj = view.projectionMatrix, viewMat = view.transform.matrix;
+  lastView = { proj, viewInv: view.transform.inverse.matrix };
+
+  // hit-test (podlaha / rohy)
+  const hits = frame.getHitTestResults(hitSource);
+  const prevHit = !!lastHit;
+  lastHit = null; lastAnyHit = null;
+  if (hits.length) {
+    const m = hits[0].getPose(refSpace).transform.matrix;
+    lastAnyHit = [m[12], m[13], m[14]];
+    if (Math.abs(m[5]) > 0.9) lastHit = lastAnyHit;   // os Y zásahu ≈ normála; horizontálna plocha
+  }
+  if (prevHit !== !!lastHit && floorY === null) updateUI();
+
+  // hĺbka
+  centerPoint = null;
+  let depth = null;
+  if (depthOK) { try { depth = frame.getDepthInformation(view); } catch (e) { depth = null; } }
+  if (depth) {
+    const invProj = M.invert(proj);
+    const d0 = safeDepth(depth, 0.5, 0.5);
+    if (d0) centerPoint = M.unproject(invProj, viewMat, 0.5, 0.5, d0);
+
+    if (!manual && floorY !== null && !frozen && frameNo % 2 === 0) {
+      for (let r = 0; r < GRID_ROWS; r++) for (let c = 0; c < GRID_COLS; c++) {
+        const u = (c + 0.5) / GRID_COLS, v = (r + 0.5) / GRID_ROWS;
+        const d = safeDepth(depth, u, v);
+        const k = (r * GRID_COLS + c) * 3;
+        if (d) { const p = M.unproject(invProj, viewMat, u, v, d); grid.pts[k] = p[0]; grid.pts[k+1] = p[1]; grid.pts[k+2] = p[2]; }
+        else grid.pts[k] = grid.pts[k+1] = grid.pts[k+2] = NaN;
+      }
+      const det = M.detectBox(grid, floorY);
+      const had = !!latest;
+      latest = det;
+      if (det) {
+        history.push(det); if (history.length > HISTORY) history.shift();
+        if (collecting) {
+          collecting.push(det);
+          if (collecting.length >= FINAL_SAMPLES) { const r = M.aggregate(collecting); collecting = null; showResult(r); }
+        }
+      }
+      if (had !== !!det) updateUI();
+    }
+  }
+  draw();
+}
+
+function safeDepth(depth, u, v) {
+  try {
+    const d = depth.getDepthInMeters(u, v);
+    return d > 0.15 && d < 4 ? d : 0;
+  } catch (e) { return 0; }
+}
+
+// ---------- kreslenie ----------
+function toScreen(p) {
+  if (!lastView) return null;
+  const v = M.mulVec(lastView.viewInv, p[0], p[1], p[2], 1);
+  const c = M.mulVec(lastView.proj, v[0], v[1], v[2], 1);
+  if (c[3] <= 0.01) return null;
+  return [(c[0] / c[3] + 1) / 2 * innerWidth, (1 - c[1] / c[3]) / 2 * innerHeight];
+}
+
+function line(a, b, color, w) {
+  const A = toScreen(a), B = toScreen(b);
+  if (!A || !B) return;
+  ctx.strokeStyle = color; ctx.lineWidth = w || 3;
+  ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
+}
+
+function label(p, text) {
+  const s = toScreen(p); if (!s) return;
+  ctx.font = '700 16px system-ui'; const w = ctx.measureText(text).width + 12;
+  ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(s[0] - w / 2, s[1] - 12, w, 24);
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, s[0], s[1]);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  const cx = innerWidth / 2, cy = innerHeight / 2;
+
+  // krížik v strede
+  ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx - 14, cy); ctx.lineTo(cx + 14, cy); ctx.moveTo(cx, cy - 14); ctx.lineTo(cx, cy + 14); ctx.stroke();
+
+  // značka zásahu podlahy
+  const ring = floorY === null || manual ? lastHit : null;
+  if (ring) {
+    const pts = [];
+    for (let i = 0; i <= 32; i++) { const a = i / 32 * Math.PI * 2; pts.push([ring[0] + Math.cos(a) * 0.05, ring[1], ring[2] + Math.sin(a) * 0.05]); }
+    for (let i = 0; i < 32; i++) line(pts[i], pts[i + 1], '#3ddc84', 3);
+  }
+
+  if (manual) { drawManual(); return; }
+
+  const box = latest;
+  if (!box || floorY === null) return;
+  const agg = M.aggregate(history) || box;
+  const color = collecting ? '#ffcc00' : '#3ddc84';
+  const b = box.corners.map(([x, z]) => [x, floorY, z]);
+  const t = box.corners.map(([x, z]) => [x, box.topY, z]);
+  for (let i = 0; i < 4; i++) {
+    line(b[i], b[(i + 1) % 4], color, 3);
+    line(t[i], t[(i + 1) % 4], color, 3);
+    line(b[i], t[i], color, 3);
+  }
+  const cm = v => Math.round(v * 100);
+  $('live').textContent = `${cm(agg.length)} × ${cm(agg.width)} × ${cm(agg.height)} cm`;
+  $('live').style.display = frozen ? 'none' : 'block';
+}
+
+function drawManual() {
+  const pts = manualPts.slice();
+  for (let i = 0; i < pts.length; i++) {
+    const s = toScreen(pts[i]); if (!s) continue;
+    ctx.fillStyle = '#ffcc00'; ctx.beginPath(); ctx.arc(s[0], s[1], 7, 0, 7); ctx.fill();
+  }
+  const cm = (p, q) => Math.round(Math.hypot(p[0] - q[0], p[2] - q[2]) * 100) + ' cm';
+  if (pts.length >= 2) { line(pts[0], pts[1], '#ffcc00'); label(mid(pts[0], pts[1]), cm(pts[0], pts[1])); }
+  if (pts.length >= 3) { line(pts[1], pts[2], '#ffcc00'); label(mid(pts[1], pts[2]), cm(pts[1], pts[2])); }
+  // živý náhľad ďalšej úsečky
+  if (!frozen && pts.length && pts.length < 3 && lastHit) line(pts[pts.length - 1], lastHit, 'rgba(255,204,0,.5)', 2);
+  if (!frozen && pts.length === 3) {
+    const top = centerPoint || lastAnyHit;
+    if (top) {
+      label([top[0], top[1], top[2]], 'V ' + Math.round((top[1] - floorY) * 100) + ' cm');
+    }
+  }
+}
+function mid(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]; }
+</script>
+</body>
+</html>
