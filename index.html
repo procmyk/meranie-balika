@@ -28,6 +28,7 @@
   #result .sub { color: #bbb; font-size: 14px; }
   #result .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
   #mode { position: absolute; top: 70px; right: 12px; font-size: 13px; padding: 8px 12px; }
+  #diag { position: absolute; left: 12px; right: 12px; bottom: 84px; text-align: center; font: 12px ui-monospace, monospace; color: #ccc; text-shadow: 0 0 3px #000; }
   #act.ok { background: #3ddc84; }
   #count { position: absolute; top: 70px; left: 12px; font-size: 13px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.6); }
   #result input { width: 100%; margin-top: 12px; padding: 12px; border-radius: 10px; border: 1px solid #555; background: #222; color: #fff; font: inherit; }
@@ -65,6 +66,7 @@
   <button id="mode" class="sec">Ručný režim</button>
   <div id="count"></div>
   <div id="live"></div>
+  <div id="diag"></div>
   <div id="bar">
     <button id="act">Nastaviť podlahu</button>
     <button id="reset" class="sec">Znova</button>
@@ -109,6 +111,9 @@ let frozen = null;          // finálny výsledok
 let manual = false;         // ručný režim
 let stable = false;         // rozmery sú ustálené (indikácia na tlačidle)
 let rejects = 0, lastSeen = -999, boxDist = null;
+let floorCand = [];         // kandidáti výšky podlahy (auto-nastavenie)
+let floorSrc = '';          // odkiaľ je podlaha: rovina / hĺbka
+let depthFrames = 0, depthValid = 0;
 let manualPts = [];         // ručné body [x,y,z]
 let frameNo = 0;
 let lastView = null;        // {proj, viewInv}
@@ -192,7 +197,7 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function resetAll() { floorY = null; resetMeasure(); }
+function resetAll() { floorY = null; floorCand = []; floorSrc = ''; resetMeasure(); }
 function resetMeasure() {
   history = []; latest = null; collecting = null; frozen = null; manualPts = []; rejects = 0; boxDist = null; stable = false;
   $('act').classList.remove('ok');
@@ -204,9 +209,10 @@ function resetMeasure() {
 // ---------- tlačidlo akcie ----------
 function onAction() {
   if (floorY === null) {
-    if (!lastHit) return;
-    floorY = lastHit[1];
-    updateUI(); return;
+    const g = lastHit ? lastHit[1] : floorGuess();
+    if (g === null) return;
+    setFloor(g, lastHit ? 'rovina' : 'hĺbka');
+    return;
   }
   if (manual) {
     if (manualPts.length < 3) { if (lastHit) manualPts.push(lastHit); }
@@ -255,8 +261,8 @@ function updateUI() {
   if (frozen) { hint.textContent = 'Hotovo. Ulož meranie alebo ho zahoď.'; act.style.display = 'none'; return; }
   act.style.display = '';
   if (floorY === null) {
-    hint.textContent = 'Namier na podlahu vedľa balíka a pomaly hýb telefónom, kým sa neobjaví zelený kruh.';
-    act.textContent = 'Nastaviť podlahu'; act.disabled = !lastHit; return;
+    hint.textContent = 'Namier na voľnú podlahu vedľa balíka (asi 1 m pred sebou) a pomaly hýb telefónom do strán. Podlaha sa nastaví sama.';
+    act.textContent = 'Nastaviť podlahu'; act.disabled = !lastHit && !floorGuess(); return;
   }
   if (manual) {
     const steps = ['1. roh podstavy', '2. roh (susedný)', '3. roh (susedný k 2.)', 'vrch balíka'];
@@ -376,7 +382,7 @@ function onFrame(t, frame) {
   if (!pose) return;
   const view = pose.views[0];
   const proj = view.projectionMatrix, viewMat = view.transform.matrix;
-  lastView = { proj, viewInv: view.transform.inverse.matrix };
+  lastView = { proj, viewInv: view.transform.inverse.matrix, camY: viewMat[13] };
 
   // hit-test (podlaha / rohy)
   const hits = frame.getHitTestResults(hitSource);
@@ -390,13 +396,15 @@ function onFrame(t, frame) {
   if (prevHit !== !!lastHit && floorY === null) updateUI();
 
   // hĺbka
-  centerPoint = null;
+  centerPoint = null; depthFloor = null;
   let depth = null;
   if (depthOK) { try { depth = frame.getDepthInformation(view); } catch (e) { depth = null; } }
   if (depth) {
     const invProj = M.invert(proj);
     const d0 = safeDepth(depth, 0.5, 0.5);
     if (d0) centerPoint = M.unproject(invProj, viewMat, 0.5, 0.5, d0);
+    depthFrames++; if (d0) depthValid++;
+    if (floorY === null) depthFloor = flatPatch(depth, invProj, viewMat);
 
     if (!manual && floorY !== null && !frozen) {
       for (let r = 0; r < GRID_ROWS; r++) for (let c = 0; c < GRID_COLS; c++) {
@@ -431,7 +439,51 @@ function onFrame(t, frame) {
       if (had !== !!latest || prevHint !== hintKey() || st !== stable) { stable = st; updateUI(); }
     }
   }
+  if (floorY === null) autoFloor();
+  if (frameNo % 10 === 0) diag(hits.length);
   draw();
+}
+
+// ---------- podlaha ----------
+let depthFloor = null;
+function floorGuess() { return lastHit ? lastHit[1] : depthFloor; }
+
+function setFloor(y, src) {
+  floorY = y; floorSrc = src; floorCand = [];
+  if (navigator.vibrate) navigator.vibrate(60);
+  updateUI();
+}
+
+// Rovná plocha v strede obrazu z hĺbkovej mapy -> výška podlahy (záloha, keď ARCore nenájde rovinu).
+function flatPatch(depth, invProj, viewMat) {
+  const ys = [];
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const u = 0.35 + c * 0.3 / 8, v = 0.45 + r * 0.3 / 8;
+    const d = safeDepth(depth, u, v);
+    if (d) ys.push(M.unproject(invProj, viewMat, u, v, d)[1]);
+  }
+  if (ys.length < 50) return null;
+  ys.sort((a, b) => a - b);
+  const spread = M.percentile(ys, 0.9) - M.percentile(ys, 0.1);
+  // plocha musí byť rovná a pod telefónom aspoň 30 cm
+  return spread < 0.03 && lastView && M.percentile(ys, 0.5) < lastView.camY - 0.3 ? M.percentile(ys, 0.5) : null;
+}
+
+// Podlaha sa nastaví sama, keď je výška stabilná ~0,5 s.
+function autoFloor() {
+  const g = floorGuess();
+  if (g === null) { floorCand = []; return; }
+  floorCand.push(g); if (floorCand.length > 15) floorCand.shift();
+  if (floorCand.length === 15 && Math.max(...floorCand) - Math.min(...floorCand) < 0.015)
+    setFloor(M.median(floorCand), lastHit ? 'rovina' : 'hĺbka');
+}
+
+function diag(nHits) {
+  const ok = v => v ? '✓' : '✗';
+  $('diag').textContent = `hĺbka ${depthOK ? (depthFrames ? Math.round(100 * depthValid / depthFrames) + '%' : '…') : 'nepodporovaná'}` +
+    ` · rovina ${ok(nHits)}${nHits && !lastHit ? ' (nie vodorovná)' : ''}` +
+    ` · podlaha ${floorY === null ? '✗' : '✓ ' + floorSrc}`;
+  depthFrames = depthValid = 0;
 }
 
 function hintKey() {
@@ -497,7 +549,7 @@ function draw() {
   ctx.beginPath(); ctx.moveTo(cx - 14, cy); ctx.lineTo(cx + 14, cy); ctx.moveTo(cx, cy - 14); ctx.lineTo(cx, cy + 14); ctx.stroke();
 
   // značka zásahu podlahy
-  const ring = floorY === null || manual ? lastHit : null;
+  const ring = floorY === null || manual ? (lastHit || (floorY === null && depthFloor !== null && centerPoint ? [centerPoint[0], depthFloor, centerPoint[2]] : null)) : null;
   if (ring) {
     const pts = [];
     for (let i = 0; i <= 32; i++) { const a = i / 32 * Math.PI * 2; pts.push([ring[0] + Math.cos(a) * 0.05, ring[1], ring[2] + Math.sin(a) * 0.05]); }

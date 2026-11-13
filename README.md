@@ -5,7 +5,7 @@ Webová aplikácia, ktorá meria rozmery balíka cez kameru telefónu (Android, 
 **Spustenie:** otvor v Chrome na Androide adresu GitHub Pages tohto repozitára.
 Telefón potrebuje aplikáciu *Google Play Services for AR*.
 
-1. Namier na podlahu vedľa balíka → **Nastaviť podlahu**
+1. Namier na voľnú podlahu vedľa balíka a pomaly hýb telefónom – podlaha sa nastaví sama (prípadne **Nastaviť podlahu**)
 2. Namier na balík zo vzdialenosti 0,5–1 m, šikmo zhora (asi 45°), a chvíľu drž telefón v kľude.
    Keď rámik sedí na balíku a tlačidlo zozelenie (rozmery sú stabilné), stlač **Zmerať**.
 
